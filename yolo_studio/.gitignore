@@ -1,0 +1,10 @@
+config.json
+*.pt
+datasets/
+runs/
+__pycache__/
+.env
+*.pyc
+*.pyo
+*.pyd
+.DS_Store

@@ -1,0 +1,14 @@
+# YOLO Studio edge agent configuration
+# Update auth_token before deploying this on a real network.
+
+host: "0.0.0.0"
+port: 8765
+auth_token: "change-me-before-production"
+
+# Relative paths are resolved from this file's directory.
+model_cache_dir: "./model_cache"
+output_dir: "./results"
+log_file: "./agent.log"
+
+# Base64 payload chunk size used by GET_RESULTS streaming.
+chunk_size: 200000

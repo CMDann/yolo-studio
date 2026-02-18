@@ -1,0 +1,11 @@
+PyQt6>=6,<7
+pyqtgraph>=0,<1
+SQLAlchemy>=2,<3
+ultralytics>=8,<9
+opencv-python>=4,<5
+Pillow>=10,<11
+websockets>=12,<13
+python-socketio>=5,<6
+roboflow>=1,<2
+huggingface_hub>=0,<1
+PyYAML>=6,<7
