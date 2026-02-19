@@ -82,7 +82,7 @@ fi
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
-python -m pip install --upgrade pip
+python3 -m pip install --upgrade pip
 
 # Help source builds find Homebrew libraries on macOS.
 if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
@@ -92,7 +92,7 @@ if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
   export PKG_CONFIG_PATH="${BREW_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 fi
 
-python -m pip install -r "${REQUIREMENTS_FILE}"
+python3 -m pip install -r "${REQUIREMENTS_FILE}"
 
 cd "${APP_DIR}"
-exec python main.py "$@"
+exec python3 main.py "$@"

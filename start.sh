@@ -21,4 +21,4 @@ if [ "${VIRTUAL_ENV:-}" != "${VENV_DIR}" ]; then
 fi
 
 cd "${APP_DIR}"
-exec python main.py "$@"
+exec python3 main.py "$@"

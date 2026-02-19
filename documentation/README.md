@@ -9,6 +9,10 @@ This folder documents the current YOLO Studio implementation in this repository.
 - [Datasets View](./views/datasets-view.md)
 - [Discover View](./views/discover-view.md)
 - [Remote Devices View](./views/remote-devices-view.md)
+- [Camera View](./views/camera-view.md)
+- [Evaluate View](./views/evaluate-view.md)
+- [Analytics View](./views/analytics-view.md)
+- [Projects View](./views/projects-view.md)
 
 ## Architecture and Tech
 

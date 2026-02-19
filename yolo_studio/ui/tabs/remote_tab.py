@@ -495,6 +495,7 @@ class RemoteTab(QWidget):
 
         super().__init__(parent)
 
+        self._active_project_id: int | None = None
         self._device_rows: dict[int, DeviceInfo] = {}
         self._saved_runs: dict[int, SavedRunInfo] = {}
         self._dataset_paths: dict[int, str] = {}
@@ -529,6 +530,11 @@ class RemoteTab(QWidget):
 
         self._build_ui()
         self.refresh_all()
+
+    def set_project_context(self, project_id: int | None, project_root: str | None = None) -> None:
+        self._active_project_id = project_id
+        self.refresh_model_selector()
+        self.refresh_dataset_selector()
 
     def refresh_all(self) -> None:
         """Refresh devices, model selector, and dataset selector from SQLite."""
@@ -577,12 +583,10 @@ class RemoteTab(QWidget):
 
         session = get_session()
         try:
-            runs = (
-                session.query(TrainingRun)
-                .filter(TrainingRun.is_saved.is_(True))
-                .order_by(TrainingRun.completed_at.desc(), TrainingRun.created_at.desc())
-                .all()
-            )
+            query = session.query(TrainingRun).filter(TrainingRun.is_saved.is_(True))
+            if self._active_project_id is not None:
+                query = query.filter(TrainingRun.project_id == self._active_project_id)
+            runs = query.order_by(TrainingRun.completed_at.desc(), TrainingRun.created_at.desc()).all()
         except Exception:
             LOGGER.exception("Failed loading saved runs for remote selector.")
             runs = []
@@ -619,7 +623,10 @@ class RemoteTab(QWidget):
 
         session = get_session()
         try:
-            datasets = session.query(Dataset).order_by(Dataset.name.asc()).all()
+            query = session.query(Dataset)
+            if self._active_project_id is not None:
+                query = query.filter(Dataset.project_id == self._active_project_id)
+            datasets = query.order_by(Dataset.name.asc()).all()
         except Exception:
             LOGGER.exception("Failed loading datasets for remote selector.")
             datasets = []
@@ -1293,6 +1300,8 @@ class RemoteTab(QWidget):
                 training_run_id=int(run_id),
                 run_at=datetime.now(timezone.utc),
                 test_dataset_path=str(Path(dataset_path).resolve()),
+                source_type="dataset",
+                source_path=str(Path(dataset_path).resolve()),
                 num_images_tested=num_images_tested,
                 map50=_to_float(metrics.get("map50")),
                 map50_95=_to_float(metrics.get("map50_95")),

@@ -2,29 +2,40 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import yaml
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QCompleter,
     QFileDialog,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QProgressBar,
     QScrollArea,
     QSizePolicy,
     QSpacerItem,
+    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -48,6 +59,7 @@ ROBOFLOW_DOWNLOAD_ROOT = PROJECT_ROOT / "datasets" / "roboflow_downloads"
 HF_MODEL_CACHE_ROOT = PROJECT_ROOT / "models" / "huggingface"
 HF_DATASET_CACHE_ROOT = PROJECT_ROOT / "datasets" / "huggingface"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+OPEN_IMAGES_CLASSES_PATH = PROJECT_ROOT / "assets" / "openimages_classes.json"
 
 
 class RoboflowSearchWorker(QThread):
@@ -549,6 +561,237 @@ class HuggingFaceDatasetImportWorker(QThread):
             self.error.emit(str(exc))
 
 
+class KaggleSearchWorker(QThread):
+    """Background worker for Kaggle dataset/competition search."""
+
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        username: str,
+        api_key: str,
+        query: str,
+        page: int,
+        page_size: int,
+        search_type: str,
+        sort: str,
+        tag: str,
+        parent: Any | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._username = username
+        self._api_key = api_key
+        self._query = query.strip()
+        self._page = max(1, page)
+        self._page_size = max(1, page_size)
+        self._search_type = search_type
+        self._sort = sort
+        self._tag = tag.strip()
+
+    def run(self) -> None:
+        try:
+            _ensure_kaggle_credentials(self._username, self._api_key)
+        except Exception as exc:
+            self.error.emit(str(exc))
+            return
+
+        try:
+            from kaggle import api as kaggle_api  # type: ignore
+        except Exception as exc:
+            self.error.emit(f"Kaggle package not available: {exc}")
+            return
+
+        self.status.emit("Searching Kaggle...")
+        self.progress.emit(10)
+
+        try:
+            if self._search_type == "competitions":
+                search_text = self._query or (self._tag or "computer-vision")
+                raw = kaggle_api.competitions_list(
+                    search=search_text or None,
+                    page=self._page,
+                    page_size=self._page_size,
+                    sort_by=self._sort,
+                    category="active",
+                )
+                data = [_normalize_kaggle_competition(item) for item in raw]
+            else:
+                search_text = self._query
+                if self._tag:
+                    search_text = f"{search_text} {self._tag}".strip()
+                raw = kaggle_api.dataset_list(
+                    search=search_text or None,
+                    page=self._page,
+                    page_size=self._page_size,
+                    file_type="csv",
+                    sort_by=self._sort,
+                    tag_ids=None,
+                )
+                data = [_normalize_kaggle_dataset(item) for item in raw]
+        except Exception as exc:
+            self.error.emit(f"Kaggle search failed: {exc}")
+            return
+
+        self.progress.emit(100)
+        self.status.emit("Search complete.")
+        self.finished.emit(data)
+
+
+class KaggleDownloadWorker(QThread):
+    """Download a Kaggle dataset and register if possible."""
+
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        username: str,
+        api_key: str,
+        dataset_ref: str,
+        dest: Path,
+        parent: Any | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._username = username
+        self._api_key = api_key
+        self._dataset_ref = dataset_ref
+        self._dest = dest
+
+    def run(self) -> None:
+        try:
+            _ensure_kaggle_credentials(self._username, self._api_key)
+        except Exception as exc:
+            self.error.emit(str(exc))
+            return
+
+        try:
+            from kaggle import api as kaggle_api  # type: ignore
+        except Exception as exc:
+            self.error.emit(f"Kaggle package not available: {exc}")
+            return
+
+        self._dest.mkdir(parents=True, exist_ok=True)
+        self.status.emit("Downloading Kaggle dataset...")
+        self.progress.emit(10)
+
+        try:
+            kaggle_api.dataset_download_files(
+                self._dataset_ref,
+                path=str(self._dest),
+                unzip=True,
+                quiet=True,
+            )
+        except Exception as exc:
+            self.error.emit(f"Kaggle download failed: {exc}")
+            return
+
+        self.progress.emit(80)
+        self.status.emit("Scanning downloaded files...")
+
+        self.progress.emit(100)
+        self.finished.emit(str(self._dest))
+
+
+class OpenImagesDownloadWorker(QThread):
+    """Download Open Images subset via FiftyOne and export to YOLO."""
+
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(str, list, int)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        classes: list[str],
+        splits: list[str],
+        max_samples: int,
+        bbox_only: bool,
+        dest: Path,
+        parent: Any | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._classes = classes
+        self._splits = splits
+        self._max_samples = max_samples
+        self._bbox_only = bbox_only
+        self._dest = dest
+
+    def run(self) -> None:
+        try:
+            import fiftyone as fo  # type: ignore
+        except Exception:
+            self.error.emit(
+                "Open Images requires the optional 'fiftyone' package. "
+                "Install with: pip install fiftyone"
+            )
+            return
+
+        self._dest.mkdir(parents=True, exist_ok=True)
+        self.status.emit("Downloading Open Images subset...")
+        self.progress.emit(5)
+
+        total_images = 0
+        try:
+            for idx, split in enumerate(self._splits):
+                dataset = fo.zoo.load_zoo_dataset(
+                    "open-images-v7",
+                    split=split,
+                    label_types=["detections"] if self._bbox_only else None,
+                    classes=self._classes,
+                    max_samples=self._max_samples,
+                )
+                export_dir = self._dest / split
+                dataset.export(
+                    export_dir=str(export_dir),
+                    dataset_type=fo.types.YOLOv5Dataset,
+                    label_field="ground_truth",
+                )
+                total_images += len(dataset)
+                self.progress.emit(int(((idx + 1) / max(1, len(self._splits))) * 90))
+        except Exception as exc:
+            self.error.emit(f"Open Images download failed: {exc}")
+            return
+
+        self.progress.emit(100)
+        self.status.emit("Open Images download complete.")
+        self.finished.emit(str(self._dest), self._classes, total_images)
+
+
+class ConvertFormatDialog(QDialog):
+    """Prompt for dataset conversion options."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Convert Dataset")
+        self.resize(420, 220)
+
+        self._skip_checkbox = QCheckBox("Skip conversion (keep raw files)", self)
+        self._csv_checkbox = QCheckBox("Convert CSV annotations to YOLO (if supported)", self)
+        self._skip_checkbox.setChecked(True)
+        self._csv_checkbox.setChecked(False)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self._skip_checkbox)
+        layout.addWidget(self._csv_checkbox)
+        layout.addStretch(1)
+        layout.addWidget(buttons)
+        self.setLayout(layout)
+
+    def values(self) -> dict[str, bool]:
+        return {
+            "skip": self._skip_checkbox.isChecked(),
+            "convert_csv": self._csv_checkbox.isChecked(),
+        }
+
 class DiscoverTab(QWidget):
     """Tab for discovering remote datasets/models and importing them locally."""
 
@@ -561,15 +804,30 @@ class DiscoverTab(QWidget):
 
         super().__init__(parent)
 
+        self._active_project_id: int | None = None
+        self._roboflow_api_key = ""
+        self._hf_token = ""
+        self._project_root = PROJECT_ROOT
+        self._download_root = ROBOFLOW_DOWNLOAD_ROOT
+        self._hf_model_cache_root = HF_MODEL_CACHE_ROOT
+        self._hf_dataset_cache_root = HF_DATASET_CACHE_ROOT
         self._config = _load_config(CONFIG_PATH)
+        self._discover_page_size = int(self._config.get("discover_page_size") or 8)
 
         self._rf_current_page = 1
-        self._rf_page_size = 8
+        self._rf_page_size = self._discover_page_size
         self._rf_has_next = False
 
         self._hf_current_page = 1
-        self._hf_page_size = 8
+        self._hf_page_size = self._discover_page_size
         self._hf_has_next = False
+
+        self._kaggle_current_page = 1
+        self._kaggle_page_size = self._discover_page_size
+        self._kaggle_has_next = False
+
+        self._kaggle_username = ""
+        self._kaggle_api_key = ""
 
         self._downloaded_hf_weights: dict[str, str] = {}
 
@@ -578,11 +836,15 @@ class DiscoverTab(QWidget):
         self._hf_search_worker: HuggingFaceSearchWorker | None = None
         self._hf_model_download_worker: HuggingFaceModelDownloadWorker | None = None
         self._hf_dataset_import_worker: HuggingFaceDatasetImportWorker | None = None
+        self._kaggle_search_worker: KaggleSearchWorker | None = None
+        self._kaggle_download_worker: KaggleDownloadWorker | None = None
+        self._open_images_worker: OpenImagesDownloadWorker | None = None
 
         self._stacked_sections: QStackedWidget
 
-        self._rf_api_key_input: QLineEdit
+        self._rf_credentials_label: QLabel
         self._rf_search_input: QLineEdit
+        self._rf_search_button: QPushButton
         self._rf_status_label: QLabel
         self._rf_progress_bar: QProgressBar
         self._rf_results_layout: QVBoxLayout
@@ -590,7 +852,7 @@ class DiscoverTab(QWidget):
         self._rf_next_button: QPushButton
         self._rf_page_label: QLabel
 
-        self._hf_token_input: QLineEdit
+        self._hf_credentials_label: QLabel
         self._hf_search_input: QLineEdit
         self._hf_status_label: QLabel
         self._hf_progress_bar: QProgressBar
@@ -599,7 +861,39 @@ class DiscoverTab(QWidget):
         self._hf_next_button: QPushButton
         self._hf_page_label: QLabel
 
+        self._kaggle_search_input: QLineEdit
+        self._kaggle_search_button: QPushButton
+        self._kaggle_type_combo: QComboBox
+        self._kaggle_sort_combo: QComboBox
+        self._kaggle_tag_input: QLineEdit
+        self._kaggle_status_label: QLabel
+        self._kaggle_progress_bar: QProgressBar
+        self._kaggle_results_layout: QVBoxLayout
+        self._kaggle_prev_button: QPushButton
+        self._kaggle_next_button: QPushButton
+        self._kaggle_page_label: QLabel
+
+        self._oi_class_input: QLineEdit
+        self._oi_class_list: QListWidget
+        self._oi_train_check: QCheckBox
+        self._oi_val_check: QCheckBox
+        self._oi_test_check: QCheckBox
+        self._oi_max_spin: QSpinBox
+        self._oi_bbox_only_check: QCheckBox
+        self._oi_size_label: QLabel
+        self._oi_download_button: QPushButton
+
         self._build_ui()
+        self._restore_credentials()
+
+    def set_project_context(self, project_id: int | None, project_root: str | None = None) -> None:
+        self._active_project_id = project_id
+        self._project_root = Path(project_root) if project_root else PROJECT_ROOT
+        self._download_root = self._project_root / "datasets" / "roboflow_downloads"
+        self._hf_model_cache_root = self._project_root / "models" / "huggingface"
+        self._hf_dataset_cache_root = self._project_root / "datasets" / "huggingface"
+
+    def refresh_credentials(self) -> None:
         self._restore_credentials()
 
     def _build_ui(self) -> None:
@@ -616,8 +910,10 @@ class DiscoverTab(QWidget):
 
         rf_button = QPushButton("Roboflow Universe", segment_bar)
         hf_button = QPushButton("Hugging Face Hub", segment_bar)
+        kaggle_button = QPushButton("Kaggle", segment_bar)
+        oi_button = QPushButton("Open Images", segment_bar)
 
-        for button in (rf_button, hf_button):
+        for button in (rf_button, hf_button, kaggle_button, oi_button):
             button.setCheckable(True)
             button.setProperty("secondary", True)
             button.setMinimumHeight(34)
@@ -628,16 +924,22 @@ class DiscoverTab(QWidget):
         group.setExclusive(True)
         group.addButton(rf_button, 0)
         group.addButton(hf_button, 1)
+        group.addButton(kaggle_button, 2)
+        group.addButton(oi_button, 3)
         group.idClicked.connect(self._switch_section)
 
         segment_layout.addWidget(rf_button)
         segment_layout.addWidget(hf_button)
+        segment_layout.addWidget(kaggle_button)
+        segment_layout.addWidget(oi_button)
         segment_layout.addItem(QSpacerItem(20, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
         segment_bar.setLayout(segment_layout)
 
         self._stacked_sections = QStackedWidget(self)
         self._stacked_sections.addWidget(self._build_roboflow_section())
         self._stacked_sections.addWidget(self._build_huggingface_section())
+        self._stacked_sections.addWidget(self._build_kaggle_section())
+        self._stacked_sections.addWidget(self._build_open_images_section())
 
         root.addWidget(segment_bar)
         root.addWidget(self._stacked_sections)
@@ -651,23 +953,8 @@ class DiscoverTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        key_row = QWidget(panel)
-        key_layout = QHBoxLayout()
-        key_layout.setContentsMargins(0, 0, 0, 0)
-        key_layout.setSpacing(8)
-
-        self._rf_api_key_input = QLineEdit(key_row)
-        self._rf_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._rf_api_key_input.setPlaceholderText("Roboflow API key")
-
-        save_key_button = QPushButton("Save Key", key_row)
-        save_key_button.setProperty("secondary", True)
-        save_key_button.clicked.connect(self._save_credentials)
-
-        key_layout.addWidget(QLabel("API Key", key_row))
-        key_layout.addWidget(self._rf_api_key_input, stretch=1)
-        key_layout.addWidget(save_key_button)
-        key_row.setLayout(key_layout)
+        self._rf_credentials_label = QLabel("Roboflow API key not set. Use File > Settings.", panel)
+        self._rf_credentials_label.setProperty("role", "warning")
 
         search_row = QWidget(panel)
         search_layout = QHBoxLayout()
@@ -678,12 +965,12 @@ class DiscoverTab(QWidget):
         self._rf_search_input.setPlaceholderText("Search projects (or use workspace/project)")
         self._rf_search_input.returnPressed.connect(lambda: self._start_roboflow_search(reset_page=True))
 
-        search_button = QPushButton("Search", search_row)
-        search_button.clicked.connect(lambda: self._start_roboflow_search(reset_page=True))
+        self._rf_search_button = QPushButton("Search", search_row)
+        self._rf_search_button.clicked.connect(lambda: self._start_roboflow_search(reset_page=True))
 
         search_layout.addWidget(QLabel("Search", search_row))
         search_layout.addWidget(self._rf_search_input, stretch=1)
-        search_layout.addWidget(search_button)
+        search_layout.addWidget(self._rf_search_button)
         search_row.setLayout(search_layout)
 
         self._rf_status_label = QLabel("Enter query and search Roboflow projects.", panel)
@@ -726,7 +1013,7 @@ class DiscoverTab(QWidget):
         pagination_layout.addStretch(1)
         pagination_row.setLayout(pagination_layout)
 
-        layout.addWidget(key_row)
+        layout.addWidget(self._rf_credentials_label)
         layout.addWidget(search_row)
         layout.addWidget(self._rf_status_label)
         layout.addWidget(self._rf_progress_bar)
@@ -746,23 +1033,11 @@ class DiscoverTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        token_row = QWidget(panel)
-        token_layout = QHBoxLayout()
-        token_layout.setContentsMargins(0, 0, 0, 0)
-        token_layout.setSpacing(8)
-
-        self._hf_token_input = QLineEdit(token_row)
-        self._hf_token_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._hf_token_input.setPlaceholderText("Hugging Face token (optional for public assets)")
-
-        save_token_button = QPushButton("Save Token", token_row)
-        save_token_button.setProperty("secondary", True)
-        save_token_button.clicked.connect(self._save_credentials)
-
-        token_layout.addWidget(QLabel("Token", token_row))
-        token_layout.addWidget(self._hf_token_input, stretch=1)
-        token_layout.addWidget(save_token_button)
-        token_row.setLayout(token_layout)
+        self._hf_credentials_label = QLabel(
+            "Hugging Face token not set. Public assets only. Use File > Settings to add one.",
+            panel,
+        )
+        self._hf_credentials_label.setProperty("role", "subtle")
 
         search_row = QWidget(panel)
         search_layout = QHBoxLayout()
@@ -822,7 +1097,7 @@ class DiscoverTab(QWidget):
         pagination_layout.addStretch(1)
         pagination_row.setLayout(pagination_layout)
 
-        layout.addWidget(token_row)
+        layout.addWidget(self._hf_credentials_label)
         layout.addWidget(search_row)
         layout.addWidget(self._hf_status_label)
         layout.addWidget(self._hf_progress_bar)
@@ -832,6 +1107,201 @@ class DiscoverTab(QWidget):
 
         self._render_empty_state(self._hf_results_layout, "No Hugging Face results yet.")
         self._update_hf_pagination_controls()
+        return panel
+
+    def _build_kaggle_section(self) -> QWidget:
+        """Create Kaggle discover section."""
+
+        panel = QWidget(self)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        self._kaggle_status_label = QLabel(
+            "Kaggle credentials not set. Use File > Settings.",
+            panel,
+        )
+        self._kaggle_status_label.setProperty("role", "warning")
+
+        search_row = QWidget(panel)
+        search_layout = QHBoxLayout()
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(8)
+
+        self._kaggle_search_input = QLineEdit(search_row)
+        self._kaggle_search_input.setPlaceholderText("Search Kaggle datasets...")
+        self._kaggle_search_input.returnPressed.connect(lambda: self._start_kaggle_search(reset_page=True))
+
+        search_button = QPushButton("Search", search_row)
+        search_button.clicked.connect(lambda: self._start_kaggle_search(reset_page=True))
+        self._kaggle_search_button = search_button
+
+        search_layout.addWidget(QLabel("Search", search_row))
+        search_layout.addWidget(self._kaggle_search_input, stretch=1)
+        search_layout.addWidget(search_button)
+        search_row.setLayout(search_layout)
+
+        filter_row = QWidget(panel)
+        filter_layout = QHBoxLayout()
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+        filter_layout.setSpacing(8)
+
+        self._kaggle_type_combo = QComboBox(filter_row)
+        self._kaggle_type_combo.addItem("Datasets", "datasets")
+        self._kaggle_type_combo.addItem("Competitions", "competitions")
+
+        self._kaggle_sort_combo = QComboBox(filter_row)
+        self._kaggle_sort_combo.addItem("Hotness", "hotness")
+        self._kaggle_sort_combo.addItem("Votes", "votes")
+        self._kaggle_sort_combo.addItem("Updated", "updated")
+        self._kaggle_sort_combo.addItem("Active", "active")
+
+        self._kaggle_tag_input = QLineEdit(filter_row)
+        self._kaggle_tag_input.setPlaceholderText("Tag filter (optional)")
+
+        filter_layout.addWidget(QLabel("Type", filter_row))
+        filter_layout.addWidget(self._kaggle_type_combo)
+        filter_layout.addWidget(QLabel("Sort", filter_row))
+        filter_layout.addWidget(self._kaggle_sort_combo)
+        filter_layout.addWidget(QLabel("Tag", filter_row))
+        filter_layout.addWidget(self._kaggle_tag_input, stretch=1)
+        filter_row.setLayout(filter_layout)
+
+        self._kaggle_progress_bar = QProgressBar(panel)
+        self._kaggle_progress_bar.setRange(0, 100)
+        self._kaggle_progress_bar.setValue(0)
+
+        scroll = QScrollArea(panel)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        results_container = QWidget(scroll)
+        self._kaggle_results_layout = QVBoxLayout()
+        self._kaggle_results_layout.setContentsMargins(0, 0, 0, 0)
+        self._kaggle_results_layout.setSpacing(8)
+        results_container.setLayout(self._kaggle_results_layout)
+        scroll.setWidget(results_container)
+
+        pagination_row = QWidget(panel)
+        pagination_layout = QHBoxLayout()
+        pagination_layout.setContentsMargins(0, 0, 0, 0)
+        pagination_layout.setSpacing(8)
+
+        self._kaggle_prev_button = QPushButton("Previous", pagination_row)
+        self._kaggle_prev_button.setProperty("secondary", True)
+        self._kaggle_prev_button.clicked.connect(self._goto_prev_kaggle_page)
+
+        self._kaggle_next_button = QPushButton("Next", pagination_row)
+        self._kaggle_next_button.setProperty("secondary", True)
+        self._kaggle_next_button.clicked.connect(self._goto_next_kaggle_page)
+
+        self._kaggle_page_label = QLabel("Page 1", pagination_row)
+        self._kaggle_page_label.setObjectName("metricValue")
+
+        pagination_layout.addWidget(self._kaggle_prev_button)
+        pagination_layout.addWidget(self._kaggle_next_button)
+        pagination_layout.addWidget(self._kaggle_page_label)
+        pagination_layout.addStretch(1)
+        pagination_row.setLayout(pagination_layout)
+
+        layout.addWidget(self._kaggle_status_label)
+        layout.addWidget(search_row)
+        layout.addWidget(filter_row)
+        layout.addWidget(self._kaggle_progress_bar)
+        layout.addWidget(scroll, stretch=1)
+        layout.addWidget(pagination_row)
+        panel.setLayout(layout)
+
+        self._render_empty_state(self._kaggle_results_layout, "No Kaggle results yet.")
+        self._update_kaggle_pagination_controls()
+        return panel
+
+    def _build_open_images_section(self) -> QWidget:
+        """Create Open Images download section."""
+
+        panel = QWidget(self)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        class_row = QWidget(panel)
+        class_layout = QHBoxLayout()
+        class_layout.setContentsMargins(0, 0, 0, 0)
+        class_layout.setSpacing(8)
+
+        self._oi_class_input = QLineEdit(class_row)
+        self._oi_class_input.setPlaceholderText("Search Open Images classes...")
+        self._oi_class_input.textChanged.connect(self._update_open_images_suggestions)
+
+        add_button = QPushButton("Add Class", class_row)
+        add_button.clicked.connect(self._add_open_images_class)
+
+        class_layout.addWidget(self._oi_class_input, stretch=1)
+        class_layout.addWidget(add_button)
+        class_row.setLayout(class_layout)
+
+        self._oi_class_list = QListWidget(panel)
+        self._oi_class_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+
+        remove_button = QPushButton("Remove Selected", panel)
+        remove_button.setProperty("secondary", True)
+        remove_button.clicked.connect(self._remove_open_images_class)
+
+        split_row = QWidget(panel)
+        split_layout = QHBoxLayout()
+        split_layout.setContentsMargins(0, 0, 0, 0)
+        split_layout.setSpacing(8)
+
+        self._oi_train_check = QCheckBox("Train", split_row)
+        self._oi_train_check.setChecked(True)
+        self._oi_val_check = QCheckBox("Validation", split_row)
+        self._oi_val_check.setChecked(True)
+        self._oi_test_check = QCheckBox("Test", split_row)
+
+        split_layout.addWidget(self._oi_train_check)
+        split_layout.addWidget(self._oi_val_check)
+        split_layout.addWidget(self._oi_test_check)
+        split_layout.addStretch(1)
+        split_row.setLayout(split_layout)
+
+        settings_row = QWidget(panel)
+        settings_layout = QHBoxLayout()
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(8)
+
+        self._oi_max_spin = QSpinBox(settings_row)
+        self._oi_max_spin.setRange(100, 5000)
+        self._oi_max_spin.setValue(500)
+        self._oi_max_spin.setSingleStep(100)
+        self._oi_max_spin.valueChanged.connect(self._update_open_images_size_estimate)
+
+        self._oi_bbox_only_check = QCheckBox("Bounding boxes only", settings_row)
+        self._oi_bbox_only_check.setChecked(True)
+        self._oi_bbox_only_check.toggled.connect(self._update_open_images_size_estimate)
+
+        settings_layout.addWidget(QLabel("Max images per class", settings_row))
+        settings_layout.addWidget(self._oi_max_spin)
+        settings_layout.addWidget(self._oi_bbox_only_check)
+        settings_layout.addStretch(1)
+        settings_row.setLayout(settings_layout)
+
+        self._oi_size_label = QLabel("Estimated download size: -", panel)
+        self._oi_size_label.setProperty("role", "subtle")
+
+        self._oi_download_button = QPushButton("Download Open Images", panel)
+        self._oi_download_button.clicked.connect(self._start_open_images_download)
+
+        layout.addWidget(class_row)
+        layout.addWidget(self._oi_class_list, stretch=1)
+        layout.addWidget(remove_button)
+        layout.addWidget(split_row)
+        layout.addWidget(settings_row)
+        layout.addWidget(self._oi_size_label)
+        layout.addWidget(self._oi_download_button)
+        panel.setLayout(layout)
+
+        self._load_open_images_classes()
+        self._update_open_images_size_estimate()
         return panel
 
     def _switch_section(self, section_index: int) -> None:
@@ -846,18 +1316,38 @@ class DiscoverTab(QWidget):
     def _restore_credentials(self) -> None:
         """Restore API credentials from local config file."""
 
-        self._rf_api_key_input.setText(str(self._config.get("roboflow_api_key", "")))
-        self._hf_token_input.setText(str(self._config.get("huggingface_token", "")))
+        self._config = _load_config(CONFIG_PATH)
+        self._roboflow_api_key = str(self._config.get("roboflow_api_key", "")).strip()
+        self._hf_token = str(self._config.get("huggingface_token", "")).strip()
+        self._kaggle_username = str(self._config.get("kaggle_username", "")).strip()
+        self._kaggle_api_key = str(self._config.get("kaggle_api_key", "")).strip()
 
-    def _save_credentials(self) -> None:
-        """Persist current API credentials into local config file."""
+        if self._roboflow_api_key:
+            self._rf_credentials_label.setText("Roboflow API key loaded.")
+            self._rf_credentials_label.setProperty("role", "subtle")
+        else:
+            self._rf_credentials_label.setText("Roboflow API key not set. Use File > Settings.")
+            self._rf_credentials_label.setProperty("role", "warning")
+        self._rf_search_input.setEnabled(bool(self._roboflow_api_key))
+        self._rf_search_button.setEnabled(bool(self._roboflow_api_key))
 
-        self._config["roboflow_api_key"] = self._rf_api_key_input.text().strip()
-        self._config["huggingface_token"] = self._hf_token_input.text().strip()
-        _save_config(CONFIG_PATH, self._config)
+        if self._hf_token:
+            self._hf_credentials_label.setText("Hugging Face token loaded.")
+            self._hf_credentials_label.setProperty("role", "subtle")
+        else:
+            self._hf_credentials_label.setText(
+                "Hugging Face token not set. Public assets only. Use File > Settings to add one."
+            )
+            self._hf_credentials_label.setProperty("role", "subtle")
 
-        self._rf_status_label.setText("Roboflow API key saved to config.json")
-        self._hf_status_label.setText("Hugging Face token saved to config.json")
+        if self._kaggle_username and self._kaggle_api_key:
+            self._kaggle_status_label.setText("Kaggle credentials loaded.")
+            self._kaggle_status_label.setProperty("role", "subtle")
+        else:
+            self._kaggle_status_label.setText("Kaggle credentials not set. Use File > Settings.")
+            self._kaggle_status_label.setProperty("role", "warning")
+        self._kaggle_search_input.setEnabled(bool(self._kaggle_username and self._kaggle_api_key))
+        self._kaggle_search_button.setEnabled(bool(self._kaggle_username and self._kaggle_api_key))
 
     def _start_roboflow_search(self, reset_page: bool) -> None:
         """Start Roboflow search worker for current query/page.
@@ -875,7 +1365,7 @@ class DiscoverTab(QWidget):
             QMessageBox.warning(self, "Validation", "Enter a Roboflow search query.")
             return
 
-        api_key = self._rf_api_key_input.text().strip()
+        api_key = self._roboflow_api_key
         if not api_key:
             QMessageBox.warning(self, "Validation", "Roboflow API key is required.")
             return
@@ -1018,7 +1508,7 @@ class DiscoverTab(QWidget):
             )
             return
 
-        api_key = self._rf_api_key_input.text().strip()
+        api_key = self._roboflow_api_key
         version = _to_int(record.get("version"))
 
         self._rf_progress_bar.setValue(0)
@@ -1029,7 +1519,7 @@ class DiscoverTab(QWidget):
             workspace_slug=workspace,
             project_slug=project_slug,
             version=version,
-            download_root=ROBOFLOW_DOWNLOAD_ROOT,
+            download_root=self._download_root,
             parent=self,
         )
         self._rf_download_worker.progress.connect(self._rf_progress_bar.setValue)
@@ -1129,7 +1619,7 @@ class DiscoverTab(QWidget):
         self._hf_status_label.setText("Searching Hugging Face models...")
 
         self._hf_search_worker = HuggingFaceSearchWorker(
-            token=self._hf_token_input.text().strip(),
+            token=self._hf_token,
             query=query,
             page=self._hf_current_page,
             page_size=self._hf_page_size,
@@ -1140,6 +1630,300 @@ class DiscoverTab(QWidget):
         self._hf_search_worker.finished.connect(self._on_hf_search_finished)
         self._hf_search_worker.error.connect(self._on_hf_search_error)
         self._hf_search_worker.start()
+
+    def _start_kaggle_search(self, reset_page: bool) -> None:
+        if self._kaggle_search_worker is not None and self._kaggle_search_worker.isRunning():
+            QMessageBox.information(self, "Search Running", "Kaggle search is already running.")
+            return
+
+        if not (self._kaggle_username and self._kaggle_api_key):
+            QMessageBox.warning(self, "Validation", "Set Kaggle credentials in File > Settings.")
+            return
+
+        query = self._kaggle_search_input.text().strip()
+        if reset_page:
+            self._kaggle_current_page = 1
+
+        self._kaggle_progress_bar.setValue(0)
+        self._kaggle_status_label.setText("Searching Kaggle...")
+
+        self._kaggle_search_worker = KaggleSearchWorker(
+            username=self._kaggle_username,
+            api_key=self._kaggle_api_key,
+            query=query,
+            page=self._kaggle_current_page,
+            page_size=self._kaggle_page_size,
+            search_type=self._kaggle_type_combo.currentData(),
+            sort=self._kaggle_sort_combo.currentData(),
+            tag=self._kaggle_tag_input.text().strip(),
+            parent=self,
+        )
+        self._kaggle_search_worker.progress.connect(self._kaggle_progress_bar.setValue)
+        self._kaggle_search_worker.status.connect(self._kaggle_status_label.setText)
+        self._kaggle_search_worker.finished.connect(self._on_kaggle_search_finished)
+        self._kaggle_search_worker.error.connect(self._on_kaggle_search_error)
+        self._kaggle_search_worker.start()
+
+    def _on_kaggle_search_finished(self, records: list[dict[str, Any]]) -> None:
+        self._kaggle_search_worker = None
+        _clear_layout(self._kaggle_results_layout)
+
+        if not records:
+            self._render_empty_state(self._kaggle_results_layout, "No Kaggle results found.")
+            self._kaggle_has_next = False
+            self._update_kaggle_pagination_controls()
+            self._kaggle_progress_bar.setValue(100)
+            self._kaggle_status_label.setText(
+                f"No Kaggle results on page {self._kaggle_current_page}."
+            )
+            return
+
+        search_type = self._kaggle_type_combo.currentData()
+        for record in records[: self._kaggle_page_size]:
+            if search_type == "competitions":
+                card = _build_kaggle_competition_card(record, self)
+            else:
+                card = _build_kaggle_dataset_card(record, self, self._start_kaggle_download)
+            self._kaggle_results_layout.addWidget(card)
+
+        self._kaggle_has_next = len(records) >= self._kaggle_page_size
+        self._update_kaggle_pagination_controls()
+        self._kaggle_status_label.setText(
+            f"Kaggle results: page {self._kaggle_current_page}, showing {len(records)}"
+        )
+        self._kaggle_progress_bar.setValue(100)
+
+    def _on_kaggle_search_error(self, message: str) -> None:
+        self._kaggle_search_worker = None
+        self._kaggle_status_label.setText(f"Kaggle search failed: {message}")
+        self._kaggle_progress_bar.setValue(0)
+        QMessageBox.critical(self, "Kaggle Search Error", message)
+
+    def _start_kaggle_download(self, dataset_ref: str) -> None:
+        if self._kaggle_download_worker is not None and self._kaggle_download_worker.isRunning():
+            QMessageBox.information(self, "Download Running", "A Kaggle download is already running.")
+            return
+
+        dataset_ref = str(dataset_ref or "").strip()
+        if not dataset_ref:
+            QMessageBox.warning(self, "Missing Metadata", "Selected dataset does not include a Kaggle reference.")
+            return
+
+        dest_root = self._project_root / "datasets" / "kaggle"
+        dest_root.mkdir(parents=True, exist_ok=True)
+        dest = dest_root / dataset_ref.replace("/", "__")
+
+        self._kaggle_download_worker = KaggleDownloadWorker(
+            username=self._kaggle_username,
+            api_key=self._kaggle_api_key,
+            dataset_ref=dataset_ref,
+            dest=dest,
+            parent=self,
+        )
+        self._kaggle_download_worker.progress.connect(self._kaggle_progress_bar.setValue)
+        self._kaggle_download_worker.status.connect(self._kaggle_status_label.setText)
+        self._kaggle_download_worker.finished.connect(self._on_kaggle_download_finished)
+        self._kaggle_download_worker.error.connect(self._on_kaggle_download_error)
+        self._kaggle_download_worker.start()
+
+    def _on_kaggle_download_finished(self, dest_path: str) -> None:
+        self._kaggle_download_worker = None
+        dest = Path(dest_path)
+        self._kaggle_status_label.setText("Kaggle download complete.")
+
+        if _has_yolo_structure(dest):
+            _register_dataset_from_path(
+                dest,
+                source=DatasetSource.KAGGLE,
+                project_id=self._active_project_id,
+                tags=["kaggle"],
+            )
+            QMessageBox.information(self, "Kaggle", f"Dataset registered from:\n{dest}")
+            return
+
+        dialog = ConvertFormatDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        values = dialog.values()
+        if values.get("convert_csv"):
+            converted = _convert_csv_to_yolo(dest)
+            if converted:
+                _register_dataset_from_path(
+                    converted,
+                    source=DatasetSource.KAGGLE,
+                    project_id=self._active_project_id,
+                    tags=["kaggle", "converted"],
+                )
+                QMessageBox.information(self, "Kaggle", f"Converted dataset registered:\n{converted}")
+            else:
+                QMessageBox.warning(self, "Kaggle", "CSV conversion not supported for this dataset.")
+
+    def _on_kaggle_download_error(self, message: str) -> None:
+        self._kaggle_download_worker = None
+        self._kaggle_status_label.setText(f"Kaggle download failed: {message}")
+        QMessageBox.critical(self, "Kaggle Download Error", message)
+
+    def _load_open_images_classes(self) -> None:
+        self._oi_classes: list[str] = []
+        if OPEN_IMAGES_CLASSES_PATH.exists():
+            try:
+                payload = json.loads(OPEN_IMAGES_CLASSES_PATH.read_text(encoding="utf-8"))
+                if isinstance(payload, list):
+                    self._oi_classes = [str(item) for item in payload if str(item).strip()]
+            except Exception:
+                LOGGER.exception("Failed to load Open Images classes from %s", OPEN_IMAGES_CLASSES_PATH)
+
+        if not self._oi_classes:
+            self._oi_classes = ["Person", "Car", "Dog", "Cat"]
+
+        completer = QCompleter(sorted(self._oi_classes), self)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._oi_class_input.setCompleter(completer)
+
+    def _update_open_images_suggestions(self) -> None:
+        # Completer handles suggestions; keep for future hooks.
+        pass
+
+    def _add_open_images_class(self) -> None:
+        raw = self._oi_class_input.text().strip()
+        if not raw:
+            return
+
+        match = None
+        for candidate in self._oi_classes:
+            if candidate.lower() == raw.lower():
+                match = candidate
+                break
+        if match is None:
+            QMessageBox.warning(self, "Open Images", "Select a class from the Open Images list.")
+            return
+
+        existing = {self._oi_class_list.item(idx).text() for idx in range(self._oi_class_list.count())}
+        if match in existing:
+            self._oi_class_input.clear()
+            return
+
+        self._oi_class_list.addItem(QListWidgetItem(match))
+        self._oi_class_input.clear()
+        self._update_open_images_size_estimate()
+
+    def _remove_open_images_class(self) -> None:
+        row = self._oi_class_list.currentRow()
+        if row >= 0:
+            self._oi_class_list.takeItem(row)
+            self._update_open_images_size_estimate()
+
+    def _update_open_images_size_estimate(self) -> None:
+        class_count = self._oi_class_list.count()
+        max_images = self._oi_max_spin.value()
+        if class_count == 0:
+            self._oi_size_label.setText("Estimated download size: -")
+            return
+
+        estimated_images = class_count * max_images
+        estimated_mb = estimated_images * 0.25
+        if estimated_mb > 1024:
+            estimate_text = f"~{estimated_mb / 1024:.1f} GB"
+        else:
+            estimate_text = f"~{estimated_mb:.0f} MB"
+        self._oi_size_label.setText(
+            f"Estimated download size: {estimate_text} for ~{estimated_images} images"
+        )
+
+    def _start_open_images_download(self) -> None:
+        if self._open_images_worker is not None and self._open_images_worker.isRunning():
+            QMessageBox.information(self, "Download Running", "Open Images download is already in progress.")
+            return
+
+        classes = [self._oi_class_list.item(idx).text() for idx in range(self._oi_class_list.count())]
+        if not classes:
+            QMessageBox.warning(self, "Validation", "Select at least one Open Images class.")
+            return
+
+        splits: list[str] = []
+        if self._oi_train_check.isChecked():
+            splits.append("train")
+        if self._oi_val_check.isChecked():
+            splits.append("validation")
+        if self._oi_test_check.isChecked():
+            splits.append("test")
+
+        if not splits:
+            QMessageBox.warning(self, "Validation", "Select at least one split.")
+            return
+
+        dest_root = self._project_root / "datasets" / "open_images"
+        dest_root.mkdir(parents=True, exist_ok=True)
+        dest = dest_root / _slugify("_".join(classes))
+
+        self._oi_download_button.setEnabled(False)
+        self._oi_size_label.setText("Starting Open Images download...")
+
+        self._open_images_worker = OpenImagesDownloadWorker(
+            classes=classes,
+            splits=splits,
+            max_samples=self._oi_max_spin.value(),
+            bbox_only=self._oi_bbox_only_check.isChecked(),
+            dest=dest,
+            parent=self,
+        )
+        self._open_images_worker.progress.connect(lambda value: self._oi_size_label.setText(f"Progress: {value}%"))
+        self._open_images_worker.status.connect(self._oi_size_label.setText)
+        self._open_images_worker.finished.connect(self._on_open_images_finished)
+        self._open_images_worker.error.connect(self._on_open_images_error)
+        self._open_images_worker.start()
+
+    def _on_open_images_finished(self, dest_path: str, classes: list[str], total_images: int) -> None:
+        self._open_images_worker = None
+        self._oi_download_button.setEnabled(True)
+
+        dest = Path(dest_path)
+        yaml_path = dest / "data.yaml"
+        yaml_payload = {
+            "path": str(dest.resolve()),
+            "train": "train/images" if (dest / "train" / "images").exists() else None,
+            "val": "validation/images" if (dest / "validation" / "images").exists() else None,
+            "test": "test/images" if (dest / "test" / "images").exists() else None,
+            "names": classes,
+            "nc": len(classes),
+        }
+        yaml_payload = {k: v for k, v in yaml_payload.items() if v is not None}
+        with yaml_path.open("w", encoding="utf-8") as handle:
+            yaml.safe_dump(yaml_payload, handle, sort_keys=False)
+
+        self._upsert_dataset_record(
+            name=f"Open Images ({', '.join(classes)})",
+            source=DatasetSource.OPEN_IMAGES,
+            local_path=str(dest.resolve()),
+            class_names=classes,
+            num_images=total_images or _count_images(dest),
+            tags=["open_images", *classes],
+            description="Imported from Open Images V7 via FiftyOne.",
+            roboflow_project_id=None,
+            hf_repo_id=None,
+        )
+
+        QMessageBox.information(
+            self,
+            "Open Images Downloaded",
+            f"Dataset saved to: {dest}\nClasses: {len(classes)}\nImages: {total_images}\nYAML: {yaml_path}",
+        )
+
+    def _on_open_images_error(self, message: str) -> None:
+        self._open_images_worker = None
+        self._oi_download_button.setEnabled(True)
+        if "fiftyone" in message.lower():
+            QMessageBox.warning(
+                self,
+                "Open Images Dependency",
+                "Open Images download requires the optional 'fiftyone' package.\n"
+                "Install with: pip install fiftyone\n"
+                "Note: this is a large dependency and may take a while to install.",
+            )
+            return
+        QMessageBox.critical(self, "Open Images Error", message)
 
     def _on_hf_search_finished(self, payload: dict[str, Any]) -> None:
         """Render Hugging Face search results.
@@ -1269,9 +2053,9 @@ class DiscoverTab(QWidget):
         self._hf_status_label.setText(f"Downloading model {repo_id}...")
 
         self._hf_model_download_worker = HuggingFaceModelDownloadWorker(
-            token=self._hf_token_input.text().strip(),
+            token=self._hf_token,
             repo_id=repo_id,
-            cache_root=HF_MODEL_CACHE_ROOT,
+            cache_root=self._hf_model_cache_root,
             parent=self,
         )
         self._hf_model_download_worker.progress.connect(self._hf_progress_bar.setValue)
@@ -1333,7 +2117,7 @@ class DiscoverTab(QWidget):
             chosen, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select Weight File",
-                str(HF_MODEL_CACHE_ROOT),
+                str(self._hf_model_cache_root),
                 "Weights (*.pt *.onnx *.engine *.tflite)",
             )
             if not chosen:
@@ -1347,12 +2131,10 @@ class DiscoverTab(QWidget):
 
         session = get_session()
         try:
-            existing = (
-                session.query(BaseWeight)
-                .filter(BaseWeight.repo_id == repo_id)
-                .order_by(BaseWeight.updated_at.desc())
-                .first()
-            )
+            query = session.query(BaseWeight).filter(BaseWeight.repo_id == repo_id)
+            if self._active_project_id is not None:
+                query = query.filter(BaseWeight.project_id == self._active_project_id)
+            existing = query.order_by(BaseWeight.updated_at.desc()).first()
 
             if existing is None:
                 existing = BaseWeight(
@@ -1366,6 +2148,7 @@ class DiscoverTab(QWidget):
                     last_updated=_parse_datetime(record.get("last_updated")),
                     notes="Registered from Discover tab.",
                     tags=["huggingface", "yolo"],
+                    project_id=self._active_project_id,
                 )
                 session.add(existing)
             else:
@@ -1377,6 +2160,8 @@ class DiscoverTab(QWidget):
                 if parsed_updated is not None:
                     existing.last_updated = parsed_updated
                 existing.updated_at = datetime.now(timezone.utc)
+                if self._active_project_id is not None:
+                    existing.project_id = self._active_project_id
 
             session.commit()
         except Exception as exc:
@@ -1412,9 +2197,9 @@ class DiscoverTab(QWidget):
         self._hf_status_label.setText(f"Importing dataset from {repo_id}...")
 
         self._hf_dataset_import_worker = HuggingFaceDatasetImportWorker(
-            token=self._hf_token_input.text().strip(),
+            token=self._hf_token,
             repo_id=repo_id,
-            cache_root=HF_DATASET_CACHE_ROOT,
+            cache_root=self._hf_dataset_cache_root,
             parent=self,
         )
         self._hf_dataset_import_worker.progress.connect(self._hf_progress_bar.setValue)
@@ -1496,6 +2281,23 @@ class DiscoverTab(QWidget):
         self._hf_prev_button.setEnabled(self._hf_current_page > 1)
         self._hf_next_button.setEnabled(self._hf_has_next)
 
+    def _update_kaggle_pagination_controls(self) -> None:
+        self._kaggle_page_label.setText(f"Page {self._kaggle_current_page}")
+        self._kaggle_prev_button.setEnabled(self._kaggle_current_page > 1)
+        self._kaggle_next_button.setEnabled(self._kaggle_has_next)
+
+    def _goto_prev_kaggle_page(self) -> None:
+        if self._kaggle_current_page <= 1:
+            return
+        self._kaggle_current_page -= 1
+        self._start_kaggle_search(reset_page=False)
+
+    def _goto_next_kaggle_page(self) -> None:
+        if not self._kaggle_has_next:
+            return
+        self._kaggle_current_page += 1
+        self._start_kaggle_search(reset_page=False)
+
     @staticmethod
     def _render_empty_state(layout: QVBoxLayout, message: str) -> None:
         """Insert a placeholder card into a results layout.
@@ -1569,6 +2371,7 @@ class DiscoverTab(QWidget):
                     num_images=num_images,
                     num_classes=num_classes,
                     tags=_clean_tags(tags),
+                    project_id=self._active_project_id,
                 )
                 session.add(existing)
             else:
@@ -1582,6 +2385,8 @@ class DiscoverTab(QWidget):
                 existing.num_images = num_images
                 existing.num_classes = num_classes
                 existing.tags = _clean_tags(tags)
+                if self._active_project_id is not None:
+                    existing.project_id = self._active_project_id
 
             session.commit()
         except Exception:
@@ -2150,6 +2955,448 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
 
 
+def _ensure_kaggle_credentials(username: str, api_key: str) -> None:
+    """Ensure kaggle.json credentials exist without overwriting."""
+
+    if not username or not api_key:
+        raise RuntimeError("Kaggle credentials are required.")
+
+    home = Path(os.path.expanduser("~"))
+    kaggle_dir = home / ".kaggle"
+    kaggle_file = kaggle_dir / "kaggle.json"
+
+    if kaggle_file.exists():
+        return
+
+    kaggle_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"username": username, "key": api_key}
+    kaggle_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        kaggle_file.chmod(0o600)
+    except Exception:
+        LOGGER.debug("Unable to chmod kaggle.json", exc_info=True)
+
+
+def _normalize_kaggle_dataset(raw: Any) -> dict[str, Any]:
+    """Normalize Kaggle dataset object or dict."""
+
+    if raw is None:
+        return {}
+
+    data: Mapping[str, Any]
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        data = {
+            "title": getattr(raw, "title", None),
+            "ref": getattr(raw, "ref", None),
+            "ownerName": getattr(raw, "ownerName", None),
+            "totalBytes": getattr(raw, "totalBytes", None),
+            "size": getattr(raw, "size", None),
+            "downloadCount": getattr(raw, "downloadCount", None),
+            "voteCount": getattr(raw, "voteCount", None),
+            "lastUpdated": getattr(raw, "lastUpdated", None),
+            "usabilityRating": getattr(raw, "usabilityRating", None),
+            "subtitle": getattr(raw, "subtitle", None),
+        }
+
+    size_value = data.get("totalBytes") or data.get("size")
+    size_text = _format_bytes(size_value)
+
+    return {
+        "title": str(data.get("title") or data.get("ref") or "Untitled"),
+        "ref": str(data.get("ref") or ""),
+        "author": str(data.get("ownerName") or data.get("author") or "-"),
+        "size": size_text,
+        "votes": _to_int(data.get("voteCount")) or 0,
+        "downloads": _to_int(data.get("downloadCount")) or 0,
+        "last_updated": _normalize_datetime_text(data.get("lastUpdated")),
+        "usability": float(data.get("usabilityRating") or 0.0),
+        "subtitle": str(data.get("subtitle") or ""),
+    }
+
+
+def _normalize_kaggle_competition(raw: Any) -> dict[str, Any]:
+    """Normalize Kaggle competition object or dict."""
+
+    if raw is None:
+        return {}
+
+    data: Mapping[str, Any]
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        data = {
+            "title": getattr(raw, "title", None),
+            "ref": getattr(raw, "ref", None),
+            "id": getattr(raw, "id", None),
+            "reward": getattr(raw, "reward", None),
+            "deadline": getattr(raw, "deadline", None),
+            "teamCount": getattr(raw, "teamCount", None),
+            "evaluationMetric": getattr(raw, "evaluationMetric", None),
+            "url": getattr(raw, "url", None),
+        }
+
+    url = data.get("url")
+    if not url and data.get("ref"):
+        url = f"https://www.kaggle.com/competitions/{data.get('ref')}"
+
+    return {
+        "title": str(data.get("title") or data.get("ref") or "Competition"),
+        "ref": str(data.get("ref") or ""),
+        "prize": str(data.get("reward") or data.get("prize") or "-"),
+        "deadline": _normalize_datetime_text(data.get("deadline")),
+        "teams": _to_int(data.get("teamCount")) or 0,
+        "metric": str(data.get("evaluationMetric") or data.get("metric") or "-"),
+        "url": str(url or ""),
+    }
+
+
+def _build_kaggle_dataset_card(
+    record: Mapping[str, Any],
+    parent: QWidget,
+    download_handler: Any,
+) -> QFrame:
+    card = QFrame(parent)
+    card.setProperty("card", True)
+    card_layout = QVBoxLayout()
+    card_layout.setContentsMargins(10, 10, 10, 10)
+    card_layout.setSpacing(6)
+
+    title = QLabel(str(record.get("title") or "Untitled"), card)
+    title.setStyleSheet("font-size: 14px; font-weight: 600;")
+
+    meta_line = QLabel(
+        (
+            f"Author: {record.get('author', '-')}"
+            f" | Size: {record.get('size', '-')}"
+            f" | Votes: {record.get('votes', '-')}"
+            f" | Downloads: {record.get('downloads', '-')}"
+        ),
+        card,
+    )
+    meta_line.setProperty("role", "subtle")
+
+    updated_line = QLabel(f"Last Updated: {record.get('last_updated', '-')}", card)
+    updated_line.setProperty("role", "subtle")
+
+    badge_row = QWidget(card)
+    badge_layout = QHBoxLayout()
+    badge_layout.setContentsMargins(0, 0, 0, 0)
+    badge_layout.setSpacing(8)
+
+    usability = float(record.get("usability") or 0.0)
+    badge = QLabel(f"Usability: {usability:.2f}", badge_row)
+    badge.setObjectName("metricBadge")
+    if usability >= 0.7:
+        badge.setProperty("role", "success")
+    elif usability >= 0.4:
+        badge.setProperty("role", "warning")
+    else:
+        badge.setProperty("role", "error")
+
+    badge_layout.addWidget(badge)
+    badge_layout.addStretch(1)
+    badge_row.setLayout(badge_layout)
+
+    actions = QWidget(card)
+    actions_layout = QHBoxLayout()
+    actions_layout.setContentsMargins(0, 0, 0, 0)
+    actions_layout.setSpacing(8)
+
+    dataset_ref = str(record.get("ref") or "")
+    download_button = QPushButton("Download Dataset", actions)
+    if dataset_ref:
+        download_button.clicked.connect(lambda _checked=False, ref=dataset_ref: download_handler(ref))
+    else:
+        download_button.setEnabled(False)
+
+    actions_layout.addWidget(download_button)
+    actions_layout.addStretch(1)
+    actions.setLayout(actions_layout)
+
+    card_layout.addWidget(title)
+    if record.get("subtitle"):
+        subtitle = QLabel(str(record.get("subtitle")), card)
+        subtitle.setProperty("role", "subtle")
+        card_layout.addWidget(subtitle)
+    card_layout.addWidget(meta_line)
+    card_layout.addWidget(updated_line)
+    card_layout.addWidget(badge_row)
+    card_layout.addWidget(actions)
+    card.setLayout(card_layout)
+    return card
+
+
+def _build_kaggle_competition_card(record: Mapping[str, Any], parent: QWidget) -> QFrame:
+    card = QFrame(parent)
+    card.setProperty("card", True)
+    card_layout = QVBoxLayout()
+    card_layout.setContentsMargins(10, 10, 10, 10)
+    card_layout.setSpacing(6)
+
+    title = QLabel(str(record.get("title") or "Competition"), card)
+    title.setStyleSheet("font-size: 14px; font-weight: 600;")
+
+    meta_line = QLabel(
+        (
+            f"Prize: {record.get('prize', '-')}"
+            f" | Deadline: {record.get('deadline', '-')}"
+            f" | Teams: {record.get('teams', '-')}"
+        ),
+        card,
+    )
+    meta_line.setProperty("role", "subtle")
+
+    metric_line = QLabel(f"Metric: {record.get('metric', '-')}", card)
+    metric_line.setProperty("role", "subtle")
+
+    actions = QWidget(card)
+    actions_layout = QHBoxLayout()
+    actions_layout.setContentsMargins(0, 0, 0, 0)
+    actions_layout.setSpacing(8)
+
+    view_button = QPushButton("View on Kaggle", actions)
+    url = str(record.get("url") or "")
+    view_button.clicked.connect(lambda _checked=False, link=url: _open_url(link))
+
+    actions_layout.addWidget(view_button)
+    actions_layout.addStretch(1)
+    actions.setLayout(actions_layout)
+
+    card_layout.addWidget(title)
+    card_layout.addWidget(meta_line)
+    card_layout.addWidget(metric_line)
+    card_layout.addWidget(actions)
+    card.setLayout(card_layout)
+    return card
+
+
+def _open_url(url: str) -> None:
+    if not url:
+        return
+    QDesktopServices.openUrl(QUrl(url))
+
+
+def _format_bytes(value: Any) -> str:
+    if value is None:
+        return "-"
+    try:
+        size = float(value)
+    except Exception:
+        return str(value)
+    if size <= 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    idx = 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024
+        idx += 1
+    return f"{size:.1f} {units[idx]}"
+
+
+def _has_yolo_structure(root: Path) -> bool:
+    if not root.exists():
+        return False
+    if list(root.rglob("data.yaml")):
+        return True
+    images_dir = root / "images"
+    labels_dir = root / "labels"
+    if images_dir.exists() and labels_dir.exists():
+        return True
+    return False
+
+
+def _register_dataset_from_path(
+    dataset_root: Path,
+    source: DatasetSource,
+    project_id: int | None,
+    tags: list[str],
+) -> None:
+    dataset_root = dataset_root.resolve()
+    yaml_paths = list(dataset_root.rglob("data.yaml"))
+    if yaml_paths:
+        dataset_root = yaml_paths[0].parent.resolve()
+
+    class_names = _load_class_names_from_yaml(dataset_root / "data.yaml")
+    if not class_names:
+        class_names = _infer_class_names_from_labels(dataset_root)
+
+    num_images = _count_images(dataset_root)
+    dataset_path = str(dataset_root)
+    name = dataset_root.name
+
+    session = get_session()
+    try:
+        existing = session.query(Dataset).filter(Dataset.local_path == dataset_path).first()
+        if existing is None:
+            existing = Dataset(
+                name=name,
+                description=f"Imported dataset from {source.value}.",
+                source=source,
+                local_path=dataset_path,
+                class_names=class_names,
+                num_images=num_images,
+                num_classes=len(class_names),
+                tags=_clean_tags(tags),
+                project_id=project_id,
+            )
+            session.add(existing)
+        else:
+            existing.name = name
+            existing.source = source
+            existing.class_names = class_names
+            existing.num_images = num_images
+            existing.num_classes = len(class_names)
+            existing.tags = _clean_tags(tags)
+            if project_id is not None:
+                existing.project_id = project_id
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def _convert_csv_to_yolo(root: Path) -> Path | None:
+    csv_files = sorted(root.rglob("*.csv"))
+    if not csv_files:
+        return None
+
+    images_index = _index_images(root)
+    if not images_index:
+        return None
+
+    column_sets = {
+        "image": {"image", "image_path", "filepath", "file", "filename", "img", "img_path"},
+        "label": {"class", "label", "category", "name"},
+        "xmin": {"xmin", "x_min", "left", "x1"},
+        "ymin": {"ymin", "y_min", "top", "y1"},
+        "xmax": {"xmax", "x_max", "right", "x2"},
+        "ymax": {"ymax", "y_max", "bottom", "y2"},
+    }
+
+    from PIL import Image
+
+    for csv_path in csv_files:
+        try:
+            with csv_path.open("r", encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                if reader.fieldnames is None:
+                    continue
+
+                header = {name.strip(): name for name in reader.fieldnames}
+
+                def find_key(candidates: set[str]) -> str | None:
+                    for key in header:
+                        if key.lower() in candidates:
+                            return header[key]
+                    return None
+
+                image_key = find_key(column_sets["image"])
+                label_key = find_key(column_sets["label"])
+                xmin_key = find_key(column_sets["xmin"])
+                ymin_key = find_key(column_sets["ymin"])
+                xmax_key = find_key(column_sets["xmax"])
+                ymax_key = find_key(column_sets["ymax"])
+
+                if not all([image_key, label_key, xmin_key, ymin_key, xmax_key, ymax_key]):
+                    continue
+
+                yolo_root = root / "yolo_converted"
+                images_dir = yolo_root / "images" / "train"
+                labels_dir = yolo_root / "labels" / "train"
+                images_dir.mkdir(parents=True, exist_ok=True)
+                labels_dir.mkdir(parents=True, exist_ok=True)
+
+                class_map: dict[str, int] = {}
+                labels_by_image: dict[str, list[str]] = {}
+
+                for row in reader:
+                    image_name = str(row.get(image_key) or "").strip()
+                    if not image_name or image_name.startswith("._"):
+                        continue
+
+                    image_path = images_index.get(image_name.lower())
+                    if image_path is None:
+                        continue
+
+                    try:
+                        with Image.open(image_path) as img:
+                            width, height = img.size
+                    except Exception:
+                        continue
+
+                    label_name = str(row.get(label_key) or "object").strip() or "object"
+                    if label_name not in class_map:
+                        class_map[label_name] = len(class_map)
+
+                    try:
+                        xmin = float(row.get(xmin_key) or 0)
+                        ymin = float(row.get(ymin_key) or 0)
+                        xmax = float(row.get(xmax_key) or 0)
+                        ymax = float(row.get(ymax_key) or 0)
+                    except Exception:
+                        continue
+
+                    box_w = max(0.0, xmax - xmin)
+                    box_h = max(0.0, ymax - ymin)
+                    if box_w <= 0 or box_h <= 0:
+                        continue
+
+                    x_center = xmin + box_w / 2.0
+                    y_center = ymin + box_h / 2.0
+
+                    x_center /= width
+                    y_center /= height
+                    box_w /= width
+                    box_h /= height
+
+                    line = f"{class_map[label_name]} {x_center:.6f} {y_center:.6f} {box_w:.6f} {box_h:.6f}"
+                    labels_by_image.setdefault(image_path.name, []).append(line)
+
+                if not labels_by_image:
+                    continue
+
+                for image_name, lines in labels_by_image.items():
+                    image_path = images_index.get(image_name.lower())
+                    if image_path is None:
+                        continue
+                    shutil.copy2(image_path, images_dir / image_path.name)
+                    label_path = labels_dir / f"{image_path.stem}.txt"
+                    label_path.write_text("\n".join(lines), encoding="utf-8")
+
+                class_names = [name for name, _idx in sorted(class_map.items(), key=lambda kv: kv[1])]
+                yaml_payload = {
+                    "path": str(yolo_root.resolve()),
+                    "train": "images/train",
+                    "val": "images/train",
+                    "test": "images/train",
+                    "names": class_names,
+                    "nc": len(class_names),
+                }
+                with (yolo_root / "data.yaml").open("w", encoding="utf-8") as handle:
+                    yaml.safe_dump(yaml_payload, handle, sort_keys=False)
+
+                return yolo_root.resolve()
+        except Exception:
+            continue
+
+    return None
+
+
+def _index_images(root: Path) -> dict[str, Path]:
+    images: dict[str, Path] = {}
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.name.startswith("._") or path.name == ".DS_Store":
+            continue
+        if path.suffix.lower() in IMAGE_EXTENSIONS:
+            images[path.name.lower()] = path
+    return images
+
 __all__ = [
     "DiscoverTab",
     "RoboflowSearchWorker",
@@ -2157,4 +3404,7 @@ __all__ = [
     "HuggingFaceSearchWorker",
     "HuggingFaceModelDownloadWorker",
     "HuggingFaceDatasetImportWorker",
+    "KaggleSearchWorker",
+    "KaggleDownloadWorker",
+    "OpenImagesDownloadWorker",
 ]

@@ -91,3 +91,7 @@ Reference implementation:
 - `yolo_studio/core/services/remote_manager.py`
 - `yolo_studio/edge/jetson_agent.py`
 - `yolo_studio/core/models/database.py`
+
+## Project Scope
+
+- Saved model and dataset selectors are filtered to the active project.

@@ -21,14 +21,20 @@ Startup sequence in plain terms:
 
 `MainWindow` contains:
 
+- A project toolbar with project selector and recent projects support.
 - A central `QTabWidget` with:
   - Training
   - Datasets
   - Discover
   - Remote Devices
+  - Camera
+  - Evaluate
+  - Analytics
 - A status bar with persistent summary labels.
 - A dockable log panel (`LogPanel`) at the bottom by default.
+- A `File` menu for project creation/opening/management.
 - A minimal `View` menu for toggling the log dock.
+- Tabs are wrapped in scroll containers to handle smaller screens.
 
 ## Tab Loading Behavior
 
@@ -38,6 +44,12 @@ Each tab is created through `_build_tab(...)`:
 - If construction throws at runtime, it also falls back to `PlaceholderTab`.
 
 This fallback mechanism is why "Step X" placeholder text can still appear even if a real tab exists in source: a runtime import/init exception will trigger placeholder rendering.
+
+## Project System
+
+- Projects are stored in SQLite and mirrored as `project.yaml` in each project root.
+- The project selector filters all tab content by project_id.
+- When no project is active, a welcome screen is shown with recent projects.
 
 ## Logging Bridge
 

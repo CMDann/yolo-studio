@@ -7,8 +7,12 @@ YOLO Studio is a desktop developer tool for training, organizing, and remotely d
 This project provides:
 - Local dataset management and dataset-building workflows
 - Configurable YOLO training with live metrics and logs
-- Discovery integrations for Roboflow Universe and Hugging Face Hub
+- Discovery integrations for Roboflow Universe, Hugging Face Hub, Kaggle, and Open Images
 - Remote deployment and testing against Jetson/Raspberry Pi edge devices
+- Real-time camera inference with session capture
+- Offline evaluation with analytics dashboards
+- Cross-run analytics and experiment comparison
+- Project system for organizing assets under named roots
 
 ## Setup
 
@@ -31,13 +35,13 @@ python main.py
 +-------------------------- YOLO Studio (PyQt6) ---------------------------+
 |                                                                          |
 |  +---------------- UI Layer ----------------+    +------ Widgets -------+ |
-|  | train_tab | dataset_tab | discover_tab   |    | log | chart | cards | |
-|  | remote_tab                              |    +----------------------+ |
+|  | train | dataset | discover | remote      |    | log | chart | cards | |
+|  | camera | evaluate | analytics            |    +----------------------+ |
 |  +------------------------------------------+                           |
 |                 |                                                    |
 |                 v                                                    |
 |  +------------------ Core Layers ----------------------------+         |
-|  | models | services | workers                              |         |
+|  | models | services | workers | projects                   |         |
 |  +----------------------------------------------------------+         |
 |                 |                                                    |
 |                 v                                                    |
@@ -71,15 +75,38 @@ Edge Device Agent (Jetson/RPi): edge/jetson_agent.py
 - Browse datasets stored in SQLite
 - Build datasets from local images and generate YOLO metadata
 - Review and export saved models
+Note: Project scope filters the dataset library and saved models.
 
 ### Discover Tab
 - Search and download datasets from Roboflow Universe
 - Search and download models/datasets from Hugging Face Hub
+- Search Kaggle datasets/competitions and download datasets
+- Download Open Images subsets with class filters
+Note: Imported assets can be attached to the active project.
 
 ### Remote Devices Tab
 - Register edge devices
 - Deploy model weights remotely
 - Run remote inference tests and store result metrics
+
+### Camera Tab
+- Run real-time webcam inference with overlays
+- Record frames, save snapshots, export detections CSV
+- Session metadata stored in the database
+
+### Evaluate Tab
+- Offline evaluation for datasets or image folders
+- Confusion matrix, PR curves, and confidence curves
+- Export reports as PDF + JSON
+
+### Analytics Tab
+- Cross-run history, loss overlays, and per-class heatmaps
+- Compare runs and export dashboard ZIP
+
+### Project System
+- Create/open/duplicate/delete projects
+- Store project config in `project.yaml`
+- Project selector filters all tabs
 
 ## Edge Agent Setup
 
@@ -94,6 +121,9 @@ Edge Device Agent (Jetson/RPi): edge/jetson_agent.py
 - Confirm `config.json` contains valid API tokens when using external services.
 - Verify CUDA/device drivers for GPU-enabled edge inference.
 - Check application and edge agent logs for runtime errors.
+- On Linux desktops without working Wayland or XCB dependencies (e.g. missing `libxcb-cursor0`),
+  YOLO Studio falls back to Qt's `minimal` platform. You can override with `QT_QPA_PLATFORM`
+  if you want to force a specific backend.
 
 ## Current Status
 

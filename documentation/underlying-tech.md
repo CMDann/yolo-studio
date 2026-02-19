@@ -39,11 +39,13 @@ Default DB:
 
 Key tables:
 
+- `Project`
 - `Dataset`
 - `TrainingRun`
 - `RemoteDevice`
 - `RemoteTestResult`
 - `BaseWeight`
+- `CameraSession`
 
 ORM model source:
 

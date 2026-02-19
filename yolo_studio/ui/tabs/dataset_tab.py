@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.models.database import Dataset, DatasetSource, RemoteDevice, TrainingRun, get_session
+from sqlalchemy.orm import joinedload
 
 try:
     import cv2
@@ -55,8 +56,6 @@ LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATASET_LIBRARY_ROOT = PROJECT_ROOT / "datasets" / "library"
-BUILDER_PREVIEW_ROOT = PROJECT_ROOT / "datasets" / "builder_preview"
 
 
 @dataclass(slots=True)
@@ -241,6 +240,11 @@ class DatasetTab(QWidget):
 
         super().__init__(parent)
 
+        self._active_project_id: int | None = None
+        self._project_root = PROJECT_ROOT
+        self._dataset_library_root = self._project_root / "datasets" / "library"
+        self._builder_preview_root = self._project_root / "datasets" / "builder_preview"
+
         self._dataset_rows: dict[int, DatasetRow] = {}
         self._builder_images: list[str] = []
         self._builder_yaml_path: str | None = None
@@ -267,6 +271,17 @@ class DatasetTab(QWidget):
         self.refresh_datasets()
         self.refresh_saved_models()
 
+    def set_project_context(self, project_id: int | None, project_root: str | None = None) -> None:
+        self._active_project_id = project_id
+        if project_root:
+            self._project_root = Path(project_root)
+        else:
+            self._project_root = PROJECT_ROOT
+        self._dataset_library_root = self._project_root / "datasets" / "library"
+        self._builder_preview_root = self._project_root / "datasets" / "builder_preview"
+        self.refresh_datasets()
+        self.refresh_saved_models()
+
     def refresh_datasets(self) -> None:
         """Reload datasets from SQLite and repopulate the library table."""
 
@@ -275,7 +290,10 @@ class DatasetTab(QWidget):
 
         session = get_session()
         try:
-            records = session.query(Dataset).order_by(Dataset.created_at.desc()).all()
+            query = session.query(Dataset)
+            if self._active_project_id is not None:
+                query = query.filter(Dataset.project_id == self._active_project_id)
+            records = query.order_by(Dataset.created_at.desc()).all()
         except Exception:
             LOGGER.exception("Failed to load datasets.")
             records = []
@@ -312,12 +330,14 @@ class DatasetTab(QWidget):
 
         session = get_session()
         try:
-            runs = (
+            query = (
                 session.query(TrainingRun)
+                .options(joinedload(TrainingRun.dataset))
                 .filter(TrainingRun.is_saved.is_(True))
-                .order_by(TrainingRun.completed_at.desc(), TrainingRun.created_at.desc())
-                .all()
             )
+            if self._active_project_id is not None:
+                query = query.filter(TrainingRun.project_id == self._active_project_id)
+            runs = query.order_by(TrainingRun.completed_at.desc(), TrainingRun.created_at.desc()).all()
         except Exception:
             LOGGER.exception("Failed to load saved models.")
             runs = []
@@ -810,6 +830,7 @@ class DatasetTab(QWidget):
                 num_images=num_images,
                 num_classes=num_classes,
                 tags=values["tags"],
+                project_id=self._active_project_id,
             )
             session.add(record)
             session.commit()
@@ -952,6 +973,7 @@ class DatasetTab(QWidget):
                 num_images=num_images,
                 num_classes=len(class_names),
                 tags=["imported"],
+                project_id=self._active_project_id,
             )
             session.add(record)
             session.commit()
@@ -1169,13 +1191,13 @@ class DatasetTab(QWidget):
 
         dataset_name = self._builder_name_input.text().strip() or "dataset"
         slug = _slugify(dataset_name)
-        BUILDER_PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
+        self._builder_preview_root.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        yaml_path = BUILDER_PREVIEW_ROOT / f"{slug}_{timestamp}_data.yaml"
+        yaml_path = self._builder_preview_root / f"{slug}_{timestamp}_data.yaml"
 
         payload = {
-            "path": f"datasets/library/{slug}_{timestamp}",
+            "path": str((self._dataset_library_root / f"{slug}_{timestamp}").resolve()),
             "train": "images/train",
             "val": "images/val",
             "test": "images/test",
@@ -1209,11 +1231,11 @@ class DatasetTab(QWidget):
         tags = [tag.strip() for tag in self._builder_tags_input.text().split(",") if tag.strip()]
         description = self._builder_description_input.toPlainText().strip()
 
-        DATASET_LIBRARY_ROOT.mkdir(parents=True, exist_ok=True)
+        self._dataset_library_root.mkdir(parents=True, exist_ok=True)
 
         slug = _slugify(name)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dataset_root = DATASET_LIBRARY_ROOT / f"{slug}_{timestamp}"
+        dataset_root = self._dataset_library_root / f"{slug}_{timestamp}"
 
         images_root = dataset_root / "images"
         labels_root = dataset_root / "labels"
@@ -1269,6 +1291,7 @@ class DatasetTab(QWidget):
                 num_images=copied_count,
                 num_classes=len(class_names),
                 tags=tags,
+                project_id=self._active_project_id,
             )
             session.add(record)
             session.commit()

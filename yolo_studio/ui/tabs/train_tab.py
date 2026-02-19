@@ -89,6 +89,7 @@ class TrainTab(QWidget):
 
         super().__init__(parent)
 
+        self._active_project_id: int | None = None
         self._project_root = Path(__file__).resolve().parents[2]
         self._datasets: dict[int, DatasetSummary] = {}
         self._trainer: Any = None
@@ -143,6 +144,11 @@ class TrainTab(QWidget):
         self._build_ui()
         self.refresh_datasets()
 
+    def set_project_context(self, project_id: int | None, project_root: str | None = None) -> None:
+        self._active_project_id = project_id
+        self._project_root = Path(project_root) if project_root else Path(__file__).resolve().parents[2]
+        self.refresh_datasets()
+
     def refresh_datasets(self) -> None:
         """Reload dataset options from SQLite and refresh the metadata card."""
 
@@ -152,7 +158,10 @@ class TrainTab(QWidget):
 
         session = get_session()
         try:
-            records = session.query(Dataset).order_by(Dataset.created_at.desc()).all()
+            query = session.query(Dataset)
+            if self._active_project_id is not None:
+                query = query.filter(Dataset.project_id == self._active_project_id)
+            records = query.order_by(Dataset.created_at.desc()).all()
         except Exception:
             LOGGER.exception("Failed to load datasets for training tab.")
             records = []
@@ -930,6 +939,7 @@ class TrainTab(QWidget):
         config: dict[str, Any] = {
             "run_name": run_name,
             "notes": self._notes_input.toPlainText().strip(),
+            "project_id": self._active_project_id,
             "dataset_id": int(dataset_id),
             "model_architecture": self._model_combo.currentText(),
             "data_yaml_path": data_yaml_path,

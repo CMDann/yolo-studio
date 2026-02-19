@@ -31,6 +31,7 @@ class TrainingConfig:
 
     run_name: str
     notes: str
+    project_id: int | None
     dataset_id: int
     model_architecture: str
     data_yaml_path: str
@@ -105,6 +106,7 @@ class TrainingConfig:
         return cls(
             run_name=run_name,
             notes=str(mapping.get("notes", "")).strip(),
+            project_id=int(mapping["project_id"]) if mapping.get("project_id") is not None else None,
             dataset_id=int(mapping["dataset_id"]),
             model_architecture=str(mapping["model_architecture"]),
             data_yaml_path=data_yaml_path,
@@ -578,6 +580,7 @@ class YOLOTrainer(QThread):
             run = TrainingRun(
                 name=self._config.run_name,
                 notes=self._config.notes or None,
+                project_id=self._config.project_id,
                 dataset_id=self._config.dataset_id,
                 model_architecture=self._config.model_architecture,
                 image_size=self._config.image_size,

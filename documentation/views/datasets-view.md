@@ -36,7 +36,7 @@ Key features:
 
 Disk output:
 
-- Root: `yolo_studio/datasets/library/<slug_timestamp>/`
+- Root: `<project_root>/datasets/library/<slug_timestamp>/`
 - Creates:
   - `images/train|val|test`
   - `labels/train|val|test`
@@ -69,6 +69,11 @@ Actions:
 - Device list for "Push to Device": `RemoteDevice`
 
 All read/write activity uses SQLAlchemy sessions from `get_session()`.
+
+## Project Scope
+
+- Dataset and saved model lists are filtered to the active project.
+- New datasets are tagged with `project_id` if a project is selected.
 
 ## Related Files
 

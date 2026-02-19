@@ -1,0 +1,23 @@
+2026-02-19 01:33:37 | INFO | __main__ | QT_QPA_PLATFORM=xcb;minimal
+2026-02-19 01:33:38 | ERROR | ui.windows.main_window | Failed to initialize Analytics tab; using placeholder.
+Traceback (most recent call last):
+  File "/home/cmdann/Development/YoloModel/yolo_studio/ui/windows/main_window.py", line 286, in _build_tab
+    tab = tab_cls(self)
+  File "/home/cmdann/Development/YoloModel/yolo_studio/ui/tabs/analytics_tab.py", line 109, in __init__
+    self._build_ui()
+  File "/home/cmdann/Development/YoloModel/yolo_studio/ui/tabs/analytics_tab.py", line 179, in _build_ui
+    splitter.addWidget(top_split)
+NameError: name 'splitter' is not defined
+[ WARN:0@0.876] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video1): can't open camera by index
+[ WARN:0@0.876] global cap.cpp:478 open VIDEOIO(V4L2): backend is generally available but can't be used to capture by index
+[ WARN:0@0.968] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video3): can't open camera by index
+[ WARN:0@0.968] global cap.cpp:478 open VIDEOIO(V4L2): backend is generally available but can't be used to capture by index
+[ WARN:0@0.968] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video4): can't open camera by index
+[ WARN:0@0.968] global cap.cpp:478 open VIDEOIO(V4L2): backend is generally available but can't be used to capture by index
+[ WARN:0@0.969] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video5): can't open camera by index
+[ WARN:0@0.969] global cap.cpp:478 open VIDEOIO(V4L2): backend is generally available but can't be used to capture by index
+2026-02-19 01:33:39 | INFO | ui.windows.main_window | Main window initialized.
+2026-02-19 01:33:39 | INFO | __main__ | YOLO Studio started successfully.
+
+
+

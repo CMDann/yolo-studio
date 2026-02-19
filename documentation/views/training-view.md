@@ -30,7 +30,7 @@ Right side monitoring:
 
 `TrainTab` can auto-generate `data.yaml` files under:
 
-- `yolo_studio/datasets/generated/`
+- `<project_root>/datasets/generated/`
 
 Class-name resolution priority during generation:
 
@@ -78,7 +78,7 @@ Chart widget:
 
 "Save This Run" behavior:
 
-- Copies best weights into `yolo_studio/saved_models/*.pt`
+- Copies best weights into `<project_root>/saved_models/*.pt`
 - Marks `TrainingRun.is_saved = True`
 - Updates `TrainingRun.weights_path` to copied file
 - Optionally stores run notes
@@ -87,6 +87,11 @@ Saved runs then appear in:
 
 - Datasets view (`Saved Models` sub-tab)
 - Remote Devices model selector
+
+## Project Scope
+
+- Dataset selector and saved model outputs are scoped to the active project.
+- New `TrainingRun` rows store `project_id`.
 
 ## Related Files
 

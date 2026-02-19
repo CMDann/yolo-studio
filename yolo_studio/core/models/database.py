@@ -24,6 +24,8 @@ class DatasetSource(str, Enum):
     MANUAL = "manual"
     ROBOFLOW = "roboflow"
     HUGGINGFACE = "huggingface"
+    KAGGLE = "kaggle"
+    OPEN_IMAGES = "open_images"
 
 
 class TrainingRunStatus(str, Enum):
@@ -76,12 +78,33 @@ class Base(DeclarativeBase):
     """Base class for all SQLAlchemy ORM models."""
 
 
+class Project(Base):
+    """Project metadata for organizing YOLO Studio assets."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+    root_dir: Mapped[str] = mapped_column(String(1024), nullable=False)
+    git_remote: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    git_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class Dataset(Base):
     """Dataset metadata stored in the YOLO Studio database."""
 
     __tablename__ = "datasets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -116,6 +139,7 @@ class TrainingRun(Base):
     __tablename__ = "training_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -190,6 +214,8 @@ class RemoteTestResult(Base):
     run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     test_dataset_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     num_images_tested: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     map50: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -204,12 +230,41 @@ class RemoteTestResult(Base):
     training_run: Mapped[TrainingRun] = relationship(back_populates="remote_test_results")
 
 
+class AppSetting(Base):
+    """Simple key/value settings stored in the database."""
+
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    value: Mapped[Any] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class CameraSession(Base):
+    """Metadata for a real-time camera inference session."""
+
+    __tablename__ = "camera_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
+    model_id: Mapped[int] = mapped_column(ForeignKey("training_runs.id"), nullable=False, index=True)
+    device_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    output_dir: Mapped[str] = mapped_column(String(1024), nullable=False)
+    frame_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    detection_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    training_run: Mapped[TrainingRun] = relationship()
+
+
 class BaseWeight(Base):
     """Model registry entry for reusable base weights."""
 
     __tablename__ = "base_weights"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     source: Mapped[BaseWeightSource] = mapped_column(
         SQLEnum(BaseWeightSource, name="base_weight_source"),
@@ -271,10 +326,47 @@ def init_db() -> None:
     """Create all tables for YOLO Studio if they do not exist."""
 
     Base.metadata.create_all(bind=engine)
+    _apply_sqlite_migrations()
+
+
+def _apply_sqlite_migrations() -> None:
+    """Apply lightweight SQLite schema updates when needed."""
+
+    if not str(engine.url).startswith("sqlite"):
+        return
+
+    with engine.connect() as conn:
+        result = conn.exec_driver_sql("PRAGMA table_info(remote_test_results)")
+        columns = {row[1] for row in result}
+
+        if "source_type" not in columns:
+            conn.exec_driver_sql("ALTER TABLE remote_test_results ADD COLUMN source_type TEXT")
+        if "source_path" not in columns:
+            conn.exec_driver_sql("ALTER TABLE remote_test_results ADD COLUMN source_path TEXT")
+
+        _ensure_column(conn, "datasets", "project_id", "INTEGER")
+        _ensure_column(conn, "training_runs", "project_id", "INTEGER")
+        _ensure_column(conn, "base_weights", "project_id", "INTEGER")
+        _ensure_column(conn, "camera_sessions", "project_id", "INTEGER")
+
+
+def _ensure_column(conn: Any, table: str, column: str, ddl_type: str) -> None:
+    exists = conn.exec_driver_sql(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    if not exists:
+        return
+
+    result = conn.exec_driver_sql(f"PRAGMA table_info({table})")
+    columns = {row[1] for row in result}
+    if column not in columns:
+        conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
 
 
 __all__ = [
     "Base",
+    "Project",
     "Dataset",
     "DatasetSource",
     "TrainingRun",
@@ -283,6 +375,8 @@ __all__ = [
     "RemoteDeviceType",
     "RemoteDeviceStatus",
     "RemoteTestResult",
+    "AppSetting",
+    "CameraSession",
     "BaseWeight",
     "BaseWeightSource",
     "DATABASE_URL",
