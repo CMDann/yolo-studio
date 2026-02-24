@@ -652,7 +652,7 @@ class RemoteTab(QWidget):
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._build_device_manager_panel())
         splitter.addWidget(self._build_test_runner_panel())
-        splitter.setSizes([360, 520])
+        splitter.setSizes([300, 620])
 
         root = QVBoxLayout()
         root.setContentsMargins(0, 0, 0, 0)
@@ -665,13 +665,13 @@ class RemoteTab(QWidget):
 
         group = QGroupBox("Device Manager", self)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         controls = QWidget(group)
         controls_layout = QHBoxLayout()
         controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(8)
+        controls_layout.setSpacing(6)
 
         add_button = QPushButton("Add Device", controls)
         add_button.clicked.connect(self._add_device)
@@ -701,7 +701,7 @@ class RemoteTab(QWidget):
         container = QWidget(scroll)
         self._device_grid_layout = QGridLayout()
         self._device_grid_layout.setContentsMargins(0, 0, 0, 0)
-        self._device_grid_layout.setSpacing(10)
+        self._device_grid_layout.setSpacing(6)
         container.setLayout(self._device_grid_layout)
 
         scroll.setWidget(container)
@@ -717,8 +717,8 @@ class RemoteTab(QWidget):
 
         group = QGroupBox("Test Runner", self)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         form = QFormLayout()
 
@@ -730,7 +730,7 @@ class RemoteTab(QWidget):
         dataset_row = QWidget(group)
         dataset_row_layout = QHBoxLayout()
         dataset_row_layout.setContentsMargins(0, 0, 0, 0)
-        dataset_row_layout.setSpacing(8)
+        dataset_row_layout.setSpacing(6)
 
         self._dataset_combo = QComboBox(dataset_row)
         self._dataset_combo.currentIndexChanged.connect(self._update_dataset_path_preview)
@@ -755,7 +755,7 @@ class RemoteTab(QWidget):
         conf_row = QWidget(group)
         conf_layout = QHBoxLayout()
         conf_layout.setContentsMargins(0, 0, 0, 0)
-        conf_layout.setSpacing(8)
+        conf_layout.setSpacing(6)
 
         self._conf_slider = QSlider(Qt.Orientation.Horizontal, conf_row)
         self._conf_slider.setRange(1, 99)
@@ -772,7 +772,7 @@ class RemoteTab(QWidget):
         iou_row = QWidget(group)
         iou_layout = QHBoxLayout()
         iou_layout.setContentsMargins(0, 0, 0, 0)
-        iou_layout.setSpacing(8)
+        iou_layout.setSpacing(6)
 
         self._iou_slider = QSlider(Qt.Orientation.Horizontal, iou_row)
         self._iou_slider.setRange(1, 99)
@@ -848,7 +848,7 @@ class RemoteTab(QWidget):
         thumb_container = QWidget(thumb_scroll)
         self._thumbnail_layout = QHBoxLayout()
         self._thumbnail_layout.setContentsMargins(0, 0, 0, 0)
-        self._thumbnail_layout.setSpacing(8)
+        self._thumbnail_layout.setSpacing(6)
         thumb_container.setLayout(self._thumbnail_layout)
 
         thumb_scroll.setWidget(thumb_container)

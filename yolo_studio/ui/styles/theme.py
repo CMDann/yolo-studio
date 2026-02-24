@@ -39,14 +39,14 @@ QDockWidget {{
 }}
 
 QGroupBox {{
-    margin-top: 12px;
-    padding: 12px;
+    margin-top: 8px;
+    padding: 8px;
 }}
 
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: 12px;
-    padding: 0 6px;
+    left: 8px;
+    padding: 0 4px;
     color: {text_primary};
 }}
 
@@ -64,7 +64,7 @@ QTreeWidget {{
     color: {text_primary};
     border: 1px solid {border};
     border-radius: 6px;
-    padding: 6px 8px;
+    padding: 4px 6px;
 }}
 
 QLineEdit:focus,
@@ -98,7 +98,7 @@ QToolButton {{
     color: #ffffff;
     border: none;
     border-radius: 6px;
-    padding: 8px 14px;
+    padding: 6px 10px;
     min-height: 16px;
 }}
 
@@ -151,8 +151,8 @@ QTabBar::tab {{
     color: {text_secondary};
     border: none;
     border-bottom: 2px solid transparent;
-    padding: 10px 14px;
-    margin-right: 8px;
+    padding: 6px 10px;
+    margin-right: 6px;
 }}
 
 QTabBar::tab:selected {{
@@ -418,7 +418,7 @@ def apply_theme(app: QApplication, theme_name: str | None = None) -> None:
     palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(colors["text_secondary"]))
 
     app.setPalette(palette)
-    app.setFont(QFont("Segoe UI", 10))
+    app.setFont(QFont("Segoe UI", 9))
     app.setStyleSheet(build_qss(selected))
 
 

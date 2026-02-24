@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import random
 import shutil
+import subprocess
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -179,7 +180,7 @@ class DatasetFormDialog(QDialog):
         path_row = QWidget(self)
         path_row_layout = QHBoxLayout()
         path_row_layout.setContentsMargins(0, 0, 0, 0)
-        path_row_layout.setSpacing(8)
+        path_row_layout.setSpacing(6)
         path_row_layout.addWidget(self._path_input, stretch=1)
         path_row_layout.addWidget(browse_button)
         path_row.setLayout(path_row_layout)
@@ -264,6 +265,10 @@ class DatasetTab(QWidget):
         self._builder_tags_input: QLineEdit
         self._builder_description_input: QTextEdit
         self._builder_yaml_display: QLineEdit
+
+        self._labeling_root_input: QLineEdit
+        self._labeling_status_label: QLabel
+        self._labeling_tool_input: QLineEdit
 
         self._saved_models_table: QTableWidget
 
@@ -387,7 +392,7 @@ class DatasetTab(QWidget):
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._build_library_panel())
         splitter.addWidget(self._build_right_panel())
-        splitter.setSizes([760, 900])
+        splitter.setSizes([620, 1040])
 
         root_layout = QVBoxLayout()
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -400,13 +405,13 @@ class DatasetTab(QWidget):
 
         panel = QWidget(self)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         toolbar = QWidget(panel)
         toolbar_layout = QHBoxLayout()
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(8)
+        toolbar_layout.setSpacing(6)
 
         new_button = QPushButton("New Dataset", toolbar)
         new_button.clicked.connect(self._create_manual_dataset)
@@ -440,7 +445,7 @@ class DatasetTab(QWidget):
 
         detail_group = QGroupBox("Dataset Details", panel)
         detail_layout = QVBoxLayout()
-        detail_layout.setContentsMargins(8, 8, 8, 8)
+        detail_layout.setContentsMargins(6, 6, 6, 6)
 
         self._dataset_detail = QTextEdit(detail_group)
         self._dataset_detail.setReadOnly(True)
@@ -462,21 +467,115 @@ class DatasetTab(QWidget):
         tabs = QTabWidget(self)
         tabs.setDocumentMode(True)
         tabs.addTab(self._build_builder_panel(), "Dataset Builder")
+        tabs.addTab(self._build_labeling_panel(), "Labeling")
         tabs.addTab(self._build_saved_models_panel(), "Saved Models")
         return tabs
+
+    def _build_labeling_panel(self) -> QWidget:
+        """Create labeling helper panel for creating label folders."""
+
+        panel = QWidget(self)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
+
+        setup_group = QGroupBox("Labeling Setup", panel)
+        setup_layout = QFormLayout()
+
+        root_row = QWidget(setup_group)
+        root_layout = QHBoxLayout()
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(6)
+
+        self._labeling_root_input = QLineEdit(root_row)
+        self._labeling_root_input.setPlaceholderText("Select dataset root (contains images/ or train/val/test)")
+
+        browse_button = QPushButton("Browse", root_row)
+        browse_button.setProperty("secondary", True)
+        browse_button.clicked.connect(self._browse_labeling_root)
+
+        scan_button = QPushButton("Scan", root_row)
+        scan_button.clicked.connect(self._scan_labeling_root)
+
+        root_layout.addWidget(self._labeling_root_input, stretch=1)
+        root_layout.addWidget(browse_button)
+        root_layout.addWidget(scan_button)
+        root_row.setLayout(root_layout)
+
+        self._labeling_status_label = QLabel("Select a dataset folder to begin.", setup_group)
+        self._labeling_status_label.setProperty("role", "subtle")
+
+        setup_layout.addRow("Dataset Root", root_row)
+        setup_layout.addRow(self._labeling_status_label)
+        setup_group.setLayout(setup_layout)
+
+        tool_group = QGroupBox("Annotation Tool", panel)
+        tool_layout = QFormLayout()
+
+        tool_row = QWidget(tool_group)
+        tool_row_layout = QHBoxLayout()
+        tool_row_layout.setContentsMargins(0, 0, 0, 0)
+        tool_row_layout.setSpacing(6)
+
+        self._labeling_tool_input = QLineEdit(tool_row)
+        self._labeling_tool_input.setPlaceholderText("Path to annotation tool executable")
+
+        tool_browse_button = QPushButton("Browse", tool_row)
+        tool_browse_button.setProperty("secondary", True)
+        tool_browse_button.clicked.connect(self._browse_labeling_tool)
+
+        tool_row_layout.addWidget(self._labeling_tool_input, stretch=1)
+        tool_row_layout.addWidget(tool_browse_button)
+        tool_row.setLayout(tool_row_layout)
+
+        tool_layout.addRow("Tool Path", tool_row)
+        tool_group.setLayout(tool_layout)
+
+        action_group = QGroupBox("Actions", panel)
+        action_layout = QHBoxLayout()
+        action_layout.setContentsMargins(6, 6, 6, 6)
+        action_layout.setSpacing(6)
+
+        create_button = QPushButton("Create Label Folders", action_group)
+        create_button.clicked.connect(self._create_label_folders)
+
+        empty_button = QPushButton("Create Empty Labels", action_group)
+        empty_button.setProperty("secondary", True)
+        empty_button.clicked.connect(self._create_empty_label_files)
+
+        open_button = QPushButton("Open Labels Folder", action_group)
+        open_button.setProperty("secondary", True)
+        open_button.clicked.connect(self._open_labels_folder)
+
+        launch_button = QPushButton("Launch Tool", action_group)
+        launch_button.clicked.connect(self._launch_labeling_tool)
+
+        action_layout.addWidget(create_button)
+        action_layout.addWidget(empty_button)
+        action_layout.addWidget(open_button)
+        action_layout.addWidget(launch_button)
+        action_layout.addStretch(1)
+        action_group.setLayout(action_layout)
+
+        layout.addWidget(setup_group)
+        layout.addWidget(tool_group)
+        layout.addWidget(action_group)
+        layout.addStretch(1)
+        panel.setLayout(layout)
+        return panel
 
     def _build_builder_panel(self) -> QWidget:
         """Create dataset builder panel with preview and class manager."""
 
         panel = QWidget(self)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         top_row = QWidget(panel)
         top_row_layout = QHBoxLayout()
         top_row_layout.setContentsMargins(0, 0, 0, 0)
-        top_row_layout.setSpacing(8)
+        top_row_layout.setSpacing(6)
 
         add_images_button = QPushButton("Add Images", top_row)
         add_images_button.clicked.connect(self._add_builder_images)
@@ -507,7 +606,7 @@ class DatasetTab(QWidget):
         right_container = QWidget(panel)
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(12)
+        right_layout.setSpacing(6)
 
         preview_group = QGroupBox("Annotation Preview", right_container)
         preview_layout = QVBoxLayout()
@@ -587,7 +686,7 @@ class DatasetTab(QWidget):
         yaml_buttons = QWidget(meta_group)
         yaml_buttons_layout = QHBoxLayout()
         yaml_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        yaml_buttons_layout.setSpacing(8)
+        yaml_buttons_layout.setSpacing(6)
 
         gen_yaml_button = QPushButton("Generate data.yaml", yaml_buttons)
         gen_yaml_button.clicked.connect(self._generate_builder_yaml)
@@ -617,7 +716,7 @@ class DatasetTab(QWidget):
 
         content_splitter.addWidget(left_group)
         content_splitter.addWidget(right_container)
-        content_splitter.setSizes([360, 540])
+        content_splitter.setSizes([320, 640])
 
         layout.addWidget(top_row)
         layout.addWidget(content_splitter)
@@ -630,13 +729,13 @@ class DatasetTab(QWidget):
 
         panel = QWidget(self)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         controls = QWidget(panel)
         controls_layout = QHBoxLayout()
         controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(8)
+        controls_layout.setSpacing(6)
 
         refresh_button = QPushButton("Refresh", controls)
         refresh_button.setProperty("secondary", True)
@@ -1087,6 +1186,145 @@ class DatasetTab(QWidget):
         self._builder_preview_label.setPixmap(QPixmap())
         self._builder_preview_meta_label.setText("-")
 
+    def _browse_labeling_root(self) -> None:
+        """Select dataset root folder for labeling helpers."""
+
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Select Dataset Root",
+            str(self._project_root),
+        )
+        if not selected:
+            return
+
+        self._labeling_root_input.setText(str(Path(selected).resolve()))
+        self._scan_labeling_root()
+
+    def _scan_labeling_root(self) -> None:
+        """Scan selected dataset folder and update labeling summary."""
+
+        root = Path(self._labeling_root_input.text().strip()) if self._labeling_root_input else None
+        if root is None or not root.exists():
+            self._labeling_status_label.setText("Dataset folder not found.")
+            self._labeling_status_label.setProperty("role", "warning")
+            self._refresh_label_style(self._labeling_status_label)
+            return
+
+        info = self._detect_labeling_structure(root)
+        images_root = info["images_root"]
+        splits = info["splits"]
+        total_images = info["total_images"]
+
+        split_text = ", ".join(splits) if splits else "none"
+        self._labeling_status_label.setText(
+            f"Images: {total_images} | Images Root: {images_root} | Splits: {split_text}"
+        )
+        self._labeling_status_label.setProperty("role", "")
+        self._refresh_label_style(self._labeling_status_label)
+
+    def _create_label_folders(self) -> None:
+        """Create labels folder (and split subfolders when detected)."""
+
+        root = Path(self._labeling_root_input.text().strip()) if self._labeling_root_input else None
+        if root is None or not root.exists():
+            QMessageBox.warning(self, "Labeling", "Select a valid dataset folder first.")
+            return
+
+        info = self._detect_labeling_structure(root)
+        labels_root = root / "labels"
+        try:
+            labels_root.mkdir(parents=True, exist_ok=True)
+            for split in info["splits"]:
+                (labels_root / split).mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            QMessageBox.critical(self, "Labeling", f"Failed to create label folders: {exc}")
+            return
+
+        self._scan_labeling_root()
+        QMessageBox.information(
+            self,
+            "Labeling",
+            f"Created labels folder at {labels_root}",
+        )
+
+    def _create_empty_label_files(self) -> None:
+        """Create empty label .txt files for every image."""
+
+        root = Path(self._labeling_root_input.text().strip()) if self._labeling_root_input else None
+        if root is None or not root.exists():
+            QMessageBox.warning(self, "Labeling", "Select a valid dataset folder first.")
+            return
+
+        info = self._detect_labeling_structure(root)
+        images_root = Path(info["images_root"])
+        labels_root = root / "labels"
+        if not labels_root.exists():
+            labels_root.mkdir(parents=True, exist_ok=True)
+
+        created = 0
+        for image_path in images_root.rglob("*"):
+            if not _is_image_file(image_path):
+                continue
+            rel_path = image_path.relative_to(images_root)
+            label_path = labels_root / rel_path.with_suffix(".txt")
+            label_path.parent.mkdir(parents=True, exist_ok=True)
+            if not label_path.exists():
+                label_path.write_text("", encoding="utf-8")
+                created += 1
+
+        self._scan_labeling_root()
+        QMessageBox.information(
+            self,
+            "Labeling",
+            f"Created {created} empty label files in {labels_root}",
+        )
+
+    def _open_labels_folder(self) -> None:
+        """Open the labels folder in the file explorer."""
+
+        root = Path(self._labeling_root_input.text().strip()) if self._labeling_root_input else None
+        if root is None or not root.exists():
+            QMessageBox.warning(self, "Labeling", "Select a valid dataset folder first.")
+            return
+
+        labels_root = root / "labels"
+        if not labels_root.exists():
+            QMessageBox.warning(self, "Labeling", "Labels folder does not exist yet.")
+            return
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(labels_root)))
+
+    def _browse_labeling_tool(self) -> None:
+        """Select an annotation tool executable."""
+
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Annotation Tool",
+            str(self._project_root),
+        )
+        if not selected:
+            return
+
+        self._labeling_tool_input.setText(str(Path(selected).resolve()))
+
+    def _launch_labeling_tool(self) -> None:
+        """Launch configured annotation tool with the dataset root."""
+
+        root = Path(self._labeling_root_input.text().strip()) if self._labeling_root_input else None
+        if root is None or not root.exists():
+            QMessageBox.warning(self, "Labeling", "Select a valid dataset folder first.")
+            return
+
+        tool_path = Path(self._labeling_tool_input.text().strip()) if self._labeling_tool_input else None
+        if tool_path is None or not tool_path.exists():
+            QMessageBox.warning(self, "Labeling", "Configure a valid annotation tool path first.")
+            return
+
+        try:
+            subprocess.Popen([str(tool_path), str(root)])
+        except Exception as exc:
+            QMessageBox.critical(self, "Labeling", f"Failed to launch tool: {exc}")
+
     def _update_builder_preview(self) -> None:
         """Render selected image with YOLO annotation overlays."""
 
@@ -1319,6 +1557,23 @@ class DatasetTab(QWidget):
 
         first = Path(self._builder_images[0])
         self._builder_name_input.setText(first.parent.name or "dataset")
+
+    @staticmethod
+    def _detect_labeling_structure(root: Path) -> dict[str, Any]:
+        """Detect dataset image root and train/val/test split folders."""
+
+        images_root = root / "images" if (root / "images").is_dir() else root
+        splits: list[str] = []
+        for split in ("train", "val", "test"):
+            if (images_root / split).is_dir():
+                splits.append(split)
+
+        total_images = _count_images(images_root)
+        return {
+            "images_root": str(images_root),
+            "splits": splits,
+            "total_images": total_images,
+        }
 
     def _export_selected_weights(self) -> None:
         """Copy selected saved model weights to a user-selected destination."""

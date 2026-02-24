@@ -900,13 +900,13 @@ class DiscoverTab(QWidget):
         """Compose segmented top bar and stacked discover sections."""
 
         root = QVBoxLayout()
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(10)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(6)
 
         segment_bar = QWidget(self)
         segment_layout = QHBoxLayout()
         segment_layout.setContentsMargins(0, 0, 0, 0)
-        segment_layout.setSpacing(8)
+        segment_layout.setSpacing(6)
 
         rf_button = QPushButton("Roboflow Universe", segment_bar)
         hf_button = QPushButton("Hugging Face Hub", segment_bar)
@@ -951,7 +951,7 @@ class DiscoverTab(QWidget):
         panel = QWidget(self)
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
         self._rf_credentials_label = QLabel("Roboflow API key not set. Use File > Settings.", panel)
         self._rf_credentials_label.setProperty("role", "warning")
@@ -959,7 +959,7 @@ class DiscoverTab(QWidget):
         search_row = QWidget(panel)
         search_layout = QHBoxLayout()
         search_layout.setContentsMargins(0, 0, 0, 0)
-        search_layout.setSpacing(8)
+        search_layout.setSpacing(6)
 
         self._rf_search_input = QLineEdit(search_row)
         self._rf_search_input.setPlaceholderText("Search projects (or use workspace/project)")
@@ -987,14 +987,14 @@ class DiscoverTab(QWidget):
         results_container = QWidget(scroll)
         self._rf_results_layout = QVBoxLayout()
         self._rf_results_layout.setContentsMargins(0, 0, 0, 0)
-        self._rf_results_layout.setSpacing(8)
+        self._rf_results_layout.setSpacing(6)
         results_container.setLayout(self._rf_results_layout)
         scroll.setWidget(results_container)
 
         pagination_row = QWidget(panel)
         pagination_layout = QHBoxLayout()
         pagination_layout.setContentsMargins(0, 0, 0, 0)
-        pagination_layout.setSpacing(8)
+        pagination_layout.setSpacing(6)
 
         self._rf_prev_button = QPushButton("Previous", pagination_row)
         self._rf_prev_button.setProperty("secondary", True)
@@ -1031,7 +1031,7 @@ class DiscoverTab(QWidget):
         panel = QWidget(self)
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
         self._hf_credentials_label = QLabel(
             "Hugging Face token not set. Public assets only. Use File > Settings to add one.",
@@ -1042,7 +1042,7 @@ class DiscoverTab(QWidget):
         search_row = QWidget(panel)
         search_layout = QHBoxLayout()
         search_layout.setContentsMargins(0, 0, 0, 0)
-        search_layout.setSpacing(8)
+        search_layout.setSpacing(6)
 
         self._hf_search_input = QLineEdit(search_row)
         self._hf_search_input.setPlaceholderText("Search Hugging Face models (filtered to YOLO)")
@@ -1071,14 +1071,14 @@ class DiscoverTab(QWidget):
         results_container = QWidget(scroll)
         self._hf_results_layout = QVBoxLayout()
         self._hf_results_layout.setContentsMargins(0, 0, 0, 0)
-        self._hf_results_layout.setSpacing(8)
+        self._hf_results_layout.setSpacing(6)
         results_container.setLayout(self._hf_results_layout)
         scroll.setWidget(results_container)
 
         pagination_row = QWidget(panel)
         pagination_layout = QHBoxLayout()
         pagination_layout.setContentsMargins(0, 0, 0, 0)
-        pagination_layout.setSpacing(8)
+        pagination_layout.setSpacing(6)
 
         self._hf_prev_button = QPushButton("Previous", pagination_row)
         self._hf_prev_button.setProperty("secondary", True)
@@ -1115,7 +1115,7 @@ class DiscoverTab(QWidget):
         panel = QWidget(self)
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
         self._kaggle_status_label = QLabel(
             "Kaggle credentials not set. Use File > Settings.",
@@ -1126,7 +1126,7 @@ class DiscoverTab(QWidget):
         search_row = QWidget(panel)
         search_layout = QHBoxLayout()
         search_layout.setContentsMargins(0, 0, 0, 0)
-        search_layout.setSpacing(8)
+        search_layout.setSpacing(6)
 
         self._kaggle_search_input = QLineEdit(search_row)
         self._kaggle_search_input.setPlaceholderText("Search Kaggle datasets...")
@@ -1144,7 +1144,7 @@ class DiscoverTab(QWidget):
         filter_row = QWidget(panel)
         filter_layout = QHBoxLayout()
         filter_layout.setContentsMargins(0, 0, 0, 0)
-        filter_layout.setSpacing(8)
+        filter_layout.setSpacing(6)
 
         self._kaggle_type_combo = QComboBox(filter_row)
         self._kaggle_type_combo.addItem("Datasets", "datasets")
@@ -1178,14 +1178,14 @@ class DiscoverTab(QWidget):
         results_container = QWidget(scroll)
         self._kaggle_results_layout = QVBoxLayout()
         self._kaggle_results_layout.setContentsMargins(0, 0, 0, 0)
-        self._kaggle_results_layout.setSpacing(8)
+        self._kaggle_results_layout.setSpacing(6)
         results_container.setLayout(self._kaggle_results_layout)
         scroll.setWidget(results_container)
 
         pagination_row = QWidget(panel)
         pagination_layout = QHBoxLayout()
         pagination_layout.setContentsMargins(0, 0, 0, 0)
-        pagination_layout.setSpacing(8)
+        pagination_layout.setSpacing(6)
 
         self._kaggle_prev_button = QPushButton("Previous", pagination_row)
         self._kaggle_prev_button.setProperty("secondary", True)
@@ -1222,12 +1222,12 @@ class DiscoverTab(QWidget):
         panel = QWidget(self)
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
         class_row = QWidget(panel)
         class_layout = QHBoxLayout()
         class_layout.setContentsMargins(0, 0, 0, 0)
-        class_layout.setSpacing(8)
+        class_layout.setSpacing(6)
 
         self._oi_class_input = QLineEdit(class_row)
         self._oi_class_input.setPlaceholderText("Search Open Images classes...")
@@ -1250,7 +1250,7 @@ class DiscoverTab(QWidget):
         split_row = QWidget(panel)
         split_layout = QHBoxLayout()
         split_layout.setContentsMargins(0, 0, 0, 0)
-        split_layout.setSpacing(8)
+        split_layout.setSpacing(6)
 
         self._oi_train_check = QCheckBox("Train", split_row)
         self._oi_train_check.setChecked(True)
@@ -1267,7 +1267,7 @@ class DiscoverTab(QWidget):
         settings_row = QWidget(panel)
         settings_layout = QHBoxLayout()
         settings_layout.setContentsMargins(0, 0, 0, 0)
-        settings_layout.setSpacing(8)
+        settings_layout.setSpacing(6)
 
         self._oi_max_spin = QSpinBox(settings_row)
         self._oi_max_spin.setRange(100, 5000)
@@ -1443,7 +1443,7 @@ class DiscoverTab(QWidget):
             card = QFrame(self)
             card.setProperty("card", True)
             card_layout = QVBoxLayout()
-            card_layout.setContentsMargins(10, 10, 10, 10)
+            card_layout.setContentsMargins(8, 8, 8, 8)
             card_layout.setSpacing(6)
 
             title = QLabel(item.get("project_name") or item.get("project_slug") or "Unnamed Project", card)
@@ -1465,7 +1465,7 @@ class DiscoverTab(QWidget):
             actions = QWidget(card)
             actions_layout = QHBoxLayout()
             actions_layout.setContentsMargins(0, 0, 0, 0)
-            actions_layout.setSpacing(8)
+            actions_layout.setSpacing(6)
 
             download_button = QPushButton("Download Dataset", actions)
             download_button.clicked.connect(
@@ -1978,7 +1978,7 @@ class DiscoverTab(QWidget):
             card = QFrame(self)
             card.setProperty("card", True)
             card_layout = QVBoxLayout()
-            card_layout.setContentsMargins(10, 10, 10, 10)
+            card_layout.setContentsMargins(8, 8, 8, 8)
             card_layout.setSpacing(6)
 
             title = QLabel(item.get("model_name") or item.get("repo_id") or "Unnamed Model", card)
@@ -1999,7 +1999,7 @@ class DiscoverTab(QWidget):
             action_row = QWidget(card)
             action_layout = QHBoxLayout()
             action_layout.setContentsMargins(0, 0, 0, 0)
-            action_layout.setSpacing(8)
+            action_layout.setSpacing(6)
 
             download_button = QPushButton("Download Model", action_row)
             download_button.clicked.connect(
@@ -2310,7 +2310,7 @@ class DiscoverTab(QWidget):
         card = QFrame()
         card.setProperty("card", True)
         card_layout = QVBoxLayout()
-        card_layout.setContentsMargins(10, 10, 10, 10)
+        card_layout.setContentsMargins(8, 8, 8, 8)
 
         label = QLabel(message, card)
         label.setProperty("role", "subtle")
@@ -3060,7 +3060,7 @@ def _build_kaggle_dataset_card(
     card = QFrame(parent)
     card.setProperty("card", True)
     card_layout = QVBoxLayout()
-    card_layout.setContentsMargins(10, 10, 10, 10)
+    card_layout.setContentsMargins(8, 8, 8, 8)
     card_layout.setSpacing(6)
 
     title = QLabel(str(record.get("title") or "Untitled"), card)
@@ -3083,7 +3083,7 @@ def _build_kaggle_dataset_card(
     badge_row = QWidget(card)
     badge_layout = QHBoxLayout()
     badge_layout.setContentsMargins(0, 0, 0, 0)
-    badge_layout.setSpacing(8)
+    badge_layout.setSpacing(6)
 
     usability = float(record.get("usability") or 0.0)
     badge = QLabel(f"Usability: {usability:.2f}", badge_row)
@@ -3102,7 +3102,7 @@ def _build_kaggle_dataset_card(
     actions = QWidget(card)
     actions_layout = QHBoxLayout()
     actions_layout.setContentsMargins(0, 0, 0, 0)
-    actions_layout.setSpacing(8)
+    actions_layout.setSpacing(6)
 
     dataset_ref = str(record.get("ref") or "")
     download_button = QPushButton("Download Dataset", actions)
@@ -3132,7 +3132,7 @@ def _build_kaggle_competition_card(record: Mapping[str, Any], parent: QWidget) -
     card = QFrame(parent)
     card.setProperty("card", True)
     card_layout = QVBoxLayout()
-    card_layout.setContentsMargins(10, 10, 10, 10)
+    card_layout.setContentsMargins(8, 8, 8, 8)
     card_layout.setSpacing(6)
 
     title = QLabel(str(record.get("title") or "Competition"), card)
@@ -3154,7 +3154,7 @@ def _build_kaggle_competition_card(record: Mapping[str, Any], parent: QWidget) -
     actions = QWidget(card)
     actions_layout = QHBoxLayout()
     actions_layout.setContentsMargins(0, 0, 0, 0)
-    actions_layout.setSpacing(8)
+    actions_layout.setSpacing(6)
 
     view_button = QPushButton("View on Kaggle", actions)
     url = str(record.get("url") or "")

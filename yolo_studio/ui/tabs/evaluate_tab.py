@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.models.database import Dataset, RemoteDevice, RemoteTestResult, TrainingRun, get_session
+from core.system_metrics import list_compute_devices, resolve_device_value
 from sqlalchemy.orm import joinedload
 
 LOGGER = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ class EvaluationWorker(QThread):
         conf: float,
         iou: float,
         imgsz: int,
+        device: str | None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -96,6 +98,7 @@ class EvaluationWorker(QThread):
         self._conf = conf
         self._iou = iou
         self._imgsz = imgsz
+        self._device = device
 
     def run(self) -> None:
         try:
@@ -114,15 +117,19 @@ class EvaluationWorker(QThread):
     def _run_dataset_eval(self, model: Any) -> None:
         self.progress.emit(0, 0, "Running dataset evaluation...")
 
+        val_kwargs: dict[str, Any] = {
+            "data": self._source_path,
+            "conf": self._conf,
+            "iou": self._iou,
+            "imgsz": self._imgsz,
+            "verbose": False,
+            "plots": False,
+        }
+        if self._device:
+            val_kwargs["device"] = self._device
+
         try:
-            result = model.val(
-                data=self._source_path,
-                conf=self._conf,
-                iou=self._iou,
-                imgsz=self._imgsz,
-                verbose=False,
-                plots=False,
-            )
+            result = model.val(**val_kwargs)
         except Exception as exc:
             self.error.emit(f"Evaluation failed: {exc}")
             return
@@ -154,14 +161,18 @@ class EvaluationWorker(QThread):
                 gt_boxes = _load_yolo_labels(label_path, image_path)
 
             start = time.time()
+            predict_kwargs: dict[str, Any] = {
+                "source": str(image_path),
+                "conf": self._conf,
+                "iou": self._iou,
+                "imgsz": self._imgsz,
+                "verbose": False,
+            }
+            if self._device:
+                predict_kwargs["device"] = self._device
+
             try:
-                results = model.predict(
-                    source=str(image_path),
-                    conf=self._conf,
-                    iou=self._iou,
-                    imgsz=self._imgsz,
-                    verbose=False,
-                )
+                results = model.predict(**predict_kwargs)
             except Exception as exc:
                 self.error.emit(f"Prediction failed on {image_path.name}: {exc}")
                 return
@@ -232,6 +243,7 @@ class EvaluateTab(QWidget):
         self._conf_slider: QSlider
         self._iou_slider: QSlider
         self._imgsz_spin: QSpinBox
+        self._device_combo: QComboBox
         self._conf_value_label: QLabel
         self._iou_value_label: QLabel
         self._run_button: QPushButton
@@ -267,18 +279,18 @@ class EvaluateTab(QWidget):
 
     def _build_ui(self) -> None:
         layout = QHBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         controls = QWidget(self)
         controls_layout = QVBoxLayout()
         controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(12)
+        controls_layout.setSpacing(6)
 
         selector_group = QGroupBox("Evaluation Setup", controls)
         selector_layout = QVBoxLayout()
-        selector_layout.setContentsMargins(8, 8, 8, 8)
-        selector_layout.setSpacing(8)
+        selector_layout.setContentsMargins(6, 6, 6, 6)
+        selector_layout.setSpacing(6)
 
         self._model_combo = QComboBox(selector_group)
         self._source_combo = QComboBox(selector_group)
@@ -291,7 +303,7 @@ class EvaluateTab(QWidget):
         folder_row = QWidget(selector_group)
         folder_layout = QHBoxLayout()
         folder_layout.setContentsMargins(0, 0, 0, 0)
-        folder_layout.setSpacing(8)
+        folder_layout.setSpacing(6)
 
         self._folder_input = QLineEdit(folder_row)
         self._folder_input.setPlaceholderText("Select a folder with images")
@@ -315,13 +327,13 @@ class EvaluateTab(QWidget):
 
         settings_group = QGroupBox("Inference Settings", controls)
         settings_layout = QVBoxLayout()
-        settings_layout.setContentsMargins(8, 8, 8, 8)
-        settings_layout.setSpacing(8)
+        settings_layout.setContentsMargins(6, 6, 6, 6)
+        settings_layout.setSpacing(6)
 
         conf_row = QWidget(settings_group)
         conf_layout = QHBoxLayout()
         conf_layout.setContentsMargins(0, 0, 0, 0)
-        conf_layout.setSpacing(8)
+        conf_layout.setSpacing(6)
 
         self._conf_slider = QSlider(Qt.Orientation.Horizontal, conf_row)
         self._conf_slider.setRange(1, 99)
@@ -338,7 +350,7 @@ class EvaluateTab(QWidget):
         iou_row = QWidget(settings_group)
         iou_layout = QHBoxLayout()
         iou_layout.setContentsMargins(0, 0, 0, 0)
-        iou_layout.setSpacing(8)
+        iou_layout.setSpacing(6)
 
         self._iou_slider = QSlider(Qt.Orientation.Horizontal, iou_row)
         self._iou_slider.setRange(1, 99)
@@ -355,7 +367,7 @@ class EvaluateTab(QWidget):
         imgsz_row = QWidget(settings_group)
         imgsz_layout = QHBoxLayout()
         imgsz_layout.setContentsMargins(0, 0, 0, 0)
-        imgsz_layout.setSpacing(8)
+        imgsz_layout.setSpacing(6)
 
         self._imgsz_spin = QSpinBox(imgsz_row)
         self._imgsz_spin.setRange(160, 4096)
@@ -366,18 +378,32 @@ class EvaluateTab(QWidget):
         imgsz_layout.addStretch(1)
         imgsz_row.setLayout(imgsz_layout)
 
+        device_row = QWidget(settings_group)
+        device_layout = QHBoxLayout()
+        device_layout.setContentsMargins(0, 0, 0, 0)
+        device_layout.setSpacing(6)
+
+        self._device_combo = QComboBox(device_row)
+        self._populate_device_combo(self._device_combo)
+
+        device_layout.addWidget(self._device_combo)
+        device_layout.addStretch(1)
+        device_row.setLayout(device_layout)
+
         settings_layout.addWidget(QLabel("Confidence", settings_group))
         settings_layout.addWidget(conf_row)
         settings_layout.addWidget(QLabel("IoU", settings_group))
         settings_layout.addWidget(iou_row)
         settings_layout.addWidget(QLabel("Image Size", settings_group))
         settings_layout.addWidget(imgsz_row)
+        settings_layout.addWidget(QLabel("Device", settings_group))
+        settings_layout.addWidget(device_row)
         settings_group.setLayout(settings_layout)
 
         control_group = QGroupBox("Controls", controls)
         control_layout = QVBoxLayout()
-        control_layout.setContentsMargins(8, 8, 8, 8)
-        control_layout.setSpacing(8)
+        control_layout.setContentsMargins(6, 6, 6, 6)
+        control_layout.setSpacing(6)
 
         self._run_button = QPushButton("Run Evaluation", control_group)
         self._run_button.clicked.connect(self._start_evaluation)
@@ -408,12 +434,12 @@ class EvaluateTab(QWidget):
         results_panel = QWidget(self)
         results_layout = QVBoxLayout()
         results_layout.setContentsMargins(0, 0, 0, 0)
-        results_layout.setSpacing(8)
+        results_layout.setSpacing(6)
 
         metrics_row = QWidget(results_panel)
         metrics_layout = QHBoxLayout()
         metrics_layout.setContentsMargins(0, 0, 0, 0)
-        metrics_layout.setSpacing(10)
+        metrics_layout.setSpacing(6)
 
         map50_card, self._map50_label = _metric_card("mAP50", metrics_row)
         map_card, self._map_label = _metric_card("mAP50-95", metrics_row)
@@ -470,10 +496,16 @@ class EvaluateTab(QWidget):
         results_panel.setLayout(results_layout)
 
         layout.addWidget(controls, stretch=1)
-        layout.addWidget(results_panel, stretch=3)
+        layout.addWidget(results_panel, stretch=4)
         self.setLayout(layout)
 
         self._update_source_visibility()
+
+    @staticmethod
+    def _populate_device_combo(combo: QComboBox) -> None:
+        combo.clear()
+        for label, value in list_compute_devices():
+            combo.addItem(label, value)
 
     def refresh_saved_models(self) -> None:
         self._saved_runs.clear()
@@ -613,6 +645,8 @@ class EvaluateTab(QWidget):
         self._export_button.setEnabled(False)
         self._clear_plots()
 
+        device = resolve_device_value(self._device_combo.currentData())
+
         self._worker = EvaluationWorker(
             weights_path=str(weights_path),
             source_type=str(source_type),
@@ -621,6 +655,7 @@ class EvaluateTab(QWidget):
             conf=self._conf_slider.value() / 100.0,
             iou=self._iou_slider.value() / 100.0,
             imgsz=int(self._imgsz_spin.value()),
+            device=device,
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
@@ -796,7 +831,7 @@ def _metric_card(title: str, parent: QWidget) -> tuple[QFrame, QLabel]:
     container = QFrame(parent)
     container.setFrameShape(QFrame.Shape.StyledPanel)
     layout = QVBoxLayout()
-    layout.setContentsMargins(10, 8, 10, 8)
+    layout.setContentsMargins(8, 6, 8, 6)
     layout.setSpacing(2)
 
     label = QLabel("-", container)

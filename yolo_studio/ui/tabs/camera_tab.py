@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.models.database import CameraSession, TrainingRun, get_session, utc_now
+from core.system_metrics import list_compute_devices, resolve_device_value
 from sqlalchemy.orm import joinedload
 
 LOGGER = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class CameraStreamWorker(QThread):
         conf: float,
         iou: float,
         output_dir: Path,
+        device: str | None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -88,6 +90,7 @@ class CameraStreamWorker(QThread):
         self._conf = conf
         self._iou = iou
         self._output_dir = output_dir
+        self._device = device
 
         self._running = False
         self._record_enabled = False
@@ -132,6 +135,14 @@ class CameraStreamWorker(QThread):
             self.error.emit(f"Unable to load model: {exc}")
             return
 
+        predict_kwargs: dict[str, Any] = {
+            "conf": self._conf,
+            "iou": self._iou,
+            "verbose": False,
+        }
+        if self._device:
+            predict_kwargs["device"] = self._device
+
         self._running = True
         frame_number = 0
         target_frame_time = 1.0 / 25.0
@@ -148,9 +159,10 @@ class CameraStreamWorker(QThread):
             detections: list[DetectionRecord] = []
 
             try:
-                results = model.predict(source=frame, conf=self._conf, iou=self._iou, verbose=False)
+                results = model.predict(source=frame, **predict_kwargs)
                 if results:
-                    boxes = results[0].boxes
+                    first = results[0]
+                    boxes = getattr(first, "boxes", None)
                     if boxes is not None and len(boxes) > 0:
                         xyxy = boxes.xyxy
                         confs = boxes.conf
@@ -211,6 +223,57 @@ class CameraStreamWorker(QThread):
                                     y1=y1,
                                     x2=x2,
                                     y2=y2,
+                                )
+                            )
+                    else:
+                        probs = getattr(first, "probs", None)
+                        top1 = getattr(probs, "top1", None)
+                        top1conf = getattr(probs, "top1conf", None)
+                        if top1 is not None:
+                            class_index = int(top1)
+                            class_name = (
+                                self._class_names[class_index]
+                                if 0 <= class_index < len(self._class_names)
+                                else str(class_index)
+                            )
+                            conf_val = float(top1conf) if top1conf is not None else 0.0
+                            color = self._class_colors[class_index % len(self._class_colors)]
+                            label = f"{class_name} {conf_val:.2f}"
+                            (text_w, text_h), baseline = cv2.getTextSize(
+                                label,
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7,
+                                2,
+                            )
+                            cv2.rectangle(
+                                frame,
+                                (8, 8),
+                                (8 + text_w + 10, 8 + text_h + baseline + 8),
+                                color,
+                                -1,
+                            )
+                            cv2.putText(
+                                frame,
+                                label,
+                                (13, 8 + text_h + 2),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7,
+                                (0, 0, 0),
+                                2,
+                                cv2.LINE_AA,
+                            )
+
+                            height, width = frame.shape[:2]
+                            detections.append(
+                                DetectionRecord(
+                                    frame_number=frame_number,
+                                    timestamp_ms=timestamp_ms,
+                                    class_name=class_name,
+                                    confidence=conf_val,
+                                    x1=0,
+                                    y1=0,
+                                    x2=max(0, width - 1),
+                                    y2=max(0, height - 1),
                                 )
                             )
             except Exception as exc:
@@ -290,6 +353,7 @@ class CameraTab(QWidget):
 
         self._device_combo: QComboBox
         self._model_combo: QComboBox
+        self._inference_device_combo: QComboBox
         self._conf_slider: QSlider
         self._iou_slider: QSlider
         self._conf_value_label: QLabel
@@ -314,23 +378,23 @@ class CameraTab(QWidget):
 
     def _build_ui(self) -> None:
         layout = QHBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         controls = QWidget(self)
         controls_layout = QVBoxLayout()
         controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(12)
+        controls_layout.setSpacing(6)
 
         setup_group = QGroupBox("Camera Setup", controls)
         setup_layout = QVBoxLayout()
-        setup_layout.setContentsMargins(8, 8, 8, 8)
-        setup_layout.setSpacing(8)
+        setup_layout.setContentsMargins(6, 6, 6, 6)
+        setup_layout.setSpacing(6)
 
         device_row = QWidget(setup_group)
         device_layout = QHBoxLayout()
         device_layout.setContentsMargins(0, 0, 0, 0)
-        device_layout.setSpacing(8)
+        device_layout.setSpacing(6)
 
         self._device_combo = QComboBox(device_row)
         refresh_button = QPushButton("Refresh", device_row)
@@ -342,23 +406,26 @@ class CameraTab(QWidget):
         device_row.setLayout(device_layout)
 
         self._model_combo = QComboBox(setup_group)
+        self._inference_device_combo = QComboBox(setup_group)
+        self._populate_device_combo(self._inference_device_combo)
 
         form = QFormLayout()
         form.addRow("Camera Device", device_row)
         form.addRow("Model", self._model_combo)
+        form.addRow("Inference Device", self._inference_device_combo)
 
         setup_layout.addLayout(form)
         setup_group.setLayout(setup_layout)
 
         threshold_group = QGroupBox("Thresholds", controls)
         threshold_layout = QVBoxLayout()
-        threshold_layout.setContentsMargins(8, 8, 8, 8)
-        threshold_layout.setSpacing(8)
+        threshold_layout.setContentsMargins(6, 6, 6, 6)
+        threshold_layout.setSpacing(6)
 
         conf_row = QWidget(threshold_group)
         conf_layout = QHBoxLayout()
         conf_layout.setContentsMargins(0, 0, 0, 0)
-        conf_layout.setSpacing(8)
+        conf_layout.setSpacing(6)
 
         self._conf_slider = QSlider(Qt.Orientation.Horizontal, conf_row)
         self._conf_slider.setRange(1, 99)
@@ -375,7 +442,7 @@ class CameraTab(QWidget):
         iou_row = QWidget(threshold_group)
         iou_layout = QHBoxLayout()
         iou_layout.setContentsMargins(0, 0, 0, 0)
-        iou_layout.setSpacing(8)
+        iou_layout.setSpacing(6)
 
         self._iou_slider = QSlider(Qt.Orientation.Horizontal, iou_row)
         self._iou_slider.setRange(1, 99)
@@ -397,8 +464,8 @@ class CameraTab(QWidget):
 
         control_group = QGroupBox("Session Controls", controls)
         control_layout = QVBoxLayout()
-        control_layout.setContentsMargins(8, 8, 8, 8)
-        control_layout.setSpacing(8)
+        control_layout.setContentsMargins(6, 6, 6, 6)
+        control_layout.setSpacing(6)
 
         self._start_button = QPushButton("Start Stream", control_group)
         self._start_button.clicked.connect(self._toggle_stream)
@@ -409,7 +476,7 @@ class CameraTab(QWidget):
         buttons_row = QWidget(control_group)
         buttons_layout = QHBoxLayout()
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(8)
+        buttons_layout.setSpacing(6)
 
         self._snapshot_button = QPushButton("Snapshot", buttons_row)
         self._snapshot_button.setProperty("secondary", True)
@@ -452,8 +519,8 @@ class CameraTab(QWidget):
 
         preview = QGroupBox("Live Preview", self)
         preview_layout = QVBoxLayout()
-        preview_layout.setContentsMargins(8, 8, 8, 8)
-        preview_layout.setSpacing(8)
+        preview_layout.setContentsMargins(6, 6, 6, 6)
+        preview_layout.setSpacing(6)
 
         self._preview_label = QLabel("Start a stream to see camera output.", preview)
         self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -465,8 +532,14 @@ class CameraTab(QWidget):
         preview.setLayout(preview_layout)
 
         layout.addWidget(controls, stretch=1)
-        layout.addWidget(preview, stretch=3)
+        layout.addWidget(preview, stretch=4)
         self.setLayout(layout)
+
+    @staticmethod
+    def _populate_device_combo(combo: QComboBox) -> None:
+        combo.clear()
+        for label, value in list_compute_devices():
+            combo.addItem(label, value)
 
     def refresh_devices(self) -> None:
         """Enumerate available camera devices via OpenCV."""
@@ -619,6 +692,7 @@ class CameraTab(QWidget):
         self._active_output_dir = output_dir
 
         class_colors = _generate_class_colors(run_info.class_names)
+        device = resolve_device_value(self._inference_device_combo.currentData())
 
         self._stream_worker = CameraStreamWorker(
             device_index=int(device_index),
@@ -628,6 +702,7 @@ class CameraTab(QWidget):
             conf=self._conf_slider.value() / 100.0,
             iou=self._iou_slider.value() / 100.0,
             output_dir=output_dir,
+            device=device,
         )
         self._stream_worker.frame_ready.connect(self._update_frame)
         self._stream_worker.frame_meta.connect(self._consume_frame_meta)
@@ -640,6 +715,7 @@ class CameraTab(QWidget):
         self._start_button.setText("Stop Stream")
         self._model_combo.setEnabled(False)
         self._device_combo.setEnabled(False)
+        self._inference_device_combo.setEnabled(False)
 
     def _stop_stream(self) -> None:
         if self._stream_worker is None:
@@ -690,6 +766,7 @@ class CameraTab(QWidget):
         self._start_button.setText("Start Stream")
         self._model_combo.setEnabled(True)
         self._device_combo.setEnabled(True)
+        self._inference_device_combo.setEnabled(True)
 
         self._finalize_session()
 

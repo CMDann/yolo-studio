@@ -11,3 +11,5 @@ roboflow>=1,<2
 huggingface_hub>=0,<1
 PyYAML>=6,<7
 kaggle>=1,<2
+psutil>=5,<6
+nvidia-ml-py3>=7,<8

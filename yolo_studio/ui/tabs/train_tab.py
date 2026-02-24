@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -31,15 +31,18 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QProgressBar,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from core.models.database import Dataset, TrainingRun, get_session
+from core.models.database import AppSetting, Dataset, TrainingRun, get_session
+from core.system_metrics import list_compute_devices, read_system_metrics, resolve_device_value
 from ui.widgets.file_drop_zone import FileDropZone
 from ui.widgets.log_panel import LogPanel
 from ui.widgets.metric_chart import MetricChart
+from ui.widgets.system_metrics_chart import SystemMetricsChart
 
 try:
     from core.workers.trainer import YOLOTrainer
@@ -49,18 +52,51 @@ except Exception:  # pragma: no cover - populated in step 6
 
 LOGGER = logging.getLogger(__name__)
 
-MODEL_ARCHITECTURES: tuple[str, ...] = (
-    "yolov8n",
-    "yolov8s",
-    "yolov8m",
-    "yolov8l",
-    "yolov8x",
-    "yolov11n",
-    "yolov11s",
-    "yolov11m",
-    "yolov11l",
-    "yolov11x",
-)
+MODEL_CATALOG: dict[str, tuple[str, ...]] = {
+    "detect": (
+        "yolov8n",
+        "yolov8s",
+        "yolov8m",
+        "yolov8l",
+        "yolov8x",
+        "yolov9c",
+        "yolov9e",
+        "yolov10n",
+        "yolov10s",
+        "yolov10m",
+        "yolov10l",
+        "yolov10x",
+        "yolo11n",
+        "yolo11s",
+        "yolo11m",
+        "yolo11l",
+        "yolo11x",
+    ),
+    "segment": (
+        "yolov8n-seg",
+        "yolov8s-seg",
+        "yolov8m-seg",
+        "yolov8l-seg",
+        "yolov8x-seg",
+        "yolo11n-seg",
+        "yolo11s-seg",
+        "yolo11m-seg",
+        "yolo11l-seg",
+        "yolo11x-seg",
+    ),
+    "classify": (
+        "yolov8n-cls",
+        "yolov8s-cls",
+        "yolov8m-cls",
+        "yolov8l-cls",
+        "yolov8x-cls",
+        "yolo11n-cls",
+        "yolo11s-cls",
+        "yolo11m-cls",
+        "yolo11l-cls",
+        "yolo11x-cls",
+    ),
+}
 
 
 @dataclass(slots=True)
@@ -108,6 +144,7 @@ class TrainTab(QWidget):
 
         self._data_yaml_path_input: QLineEdit
 
+        self._task_combo: QComboBox
         self._model_combo: QComboBox
         self._epochs_spin: QSpinBox
         self._batch_size_spin: QSpinBox
@@ -116,6 +153,7 @@ class TrainTab(QWidget):
         self._optimizer_combo: QComboBox
         self._warmup_epochs_spin: QDoubleSpinBox
         self._weight_decay_spin: QDoubleSpinBox
+        self._device_combo: QComboBox
 
         self._mosaic_checkbox: QCheckBox
         self._mixup_checkbox: QCheckBox
@@ -136,12 +174,20 @@ class TrainTab(QWidget):
         self._save_run_button: QPushButton
 
         self._metric_chart: MetricChart
+        self._system_metrics_chart: SystemMetricsChart
+        self._system_metrics_timer: QTimer
+        self._system_metrics_index: int
+        self._monitor_tabs: QTabWidget
         self._epoch_progress_bar: QProgressBar
         self._epoch_progress_label: QLabel
         self._best_map_label: QLabel
         self._log_panel: LogPanel
 
         self._build_ui()
+        self._system_metrics_index = 0
+        self._system_metrics_timer = QTimer(self)
+        self._system_metrics_timer.setInterval(1000)
+        self._system_metrics_timer.timeout.connect(self._poll_system_metrics)
         self.refresh_datasets()
 
     def set_project_context(self, project_id: int | None, project_root: str | None = None) -> None:
@@ -204,7 +250,7 @@ class TrainTab(QWidget):
 
         splitter.addWidget(self._build_left_panel())
         splitter.addWidget(self._build_right_panel())
-        splitter.setSizes([780, 820])
+        splitter.setSizes([620, 980])
 
         root_layout = QVBoxLayout()
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -221,8 +267,8 @@ class TrainTab(QWidget):
 
         container = QWidget(scroll)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(16)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         layout.addWidget(self._build_model_dataset_group())
         layout.addWidget(self._build_dataset_drop_group())
@@ -244,16 +290,35 @@ class TrainTab(QWidget):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-        form.setSpacing(10)
+        form.setSpacing(6)
+
+        self._task_combo = QComboBox(group)
+        self._task_combo.addItem("Detect (Bounding Boxes)", "detect")
+        self._task_combo.addItem("Segment (Masks)", "segment")
+        self._task_combo.addItem("Classify (Image)", "classify")
+        self._task_combo.currentIndexChanged.connect(self._on_task_changed)
 
         self._model_combo = QComboBox(group)
-        self._model_combo.addItems(list(MODEL_ARCHITECTURES))
-        self._model_combo.setCurrentText("yolov8n")
+        self._model_combo.setEditable(True)
+        self._refresh_model_options()
+
+        model_row = QWidget(group)
+        model_row_layout = QHBoxLayout()
+        model_row_layout.setContentsMargins(0, 0, 0, 0)
+        model_row_layout.setSpacing(6)
+
+        browse_model_button = QPushButton("Browse Model", model_row)
+        browse_model_button.setProperty("secondary", True)
+        browse_model_button.clicked.connect(self._select_model_source)
+
+        model_row_layout.addWidget(self._model_combo, stretch=1)
+        model_row_layout.addWidget(browse_model_button)
+        model_row.setLayout(model_row_layout)
 
         dataset_row = QWidget(group)
         dataset_row_layout = QHBoxLayout()
         dataset_row_layout.setContentsMargins(0, 0, 0, 0)
-        dataset_row_layout.setSpacing(8)
+        dataset_row_layout.setSpacing(6)
 
         self._dataset_combo = QComboBox(dataset_row)
         self._dataset_combo.currentIndexChanged.connect(self._on_dataset_changed)
@@ -270,7 +335,8 @@ class TrainTab(QWidget):
         self._dataset_meta_label.setWordWrap(True)
         self._dataset_meta_label.setObjectName("metricValue")
 
-        form.addRow("Architecture", self._model_combo)
+        form.addRow("Task", self._task_combo)
+        form.addRow("Model", model_row)
         form.addRow("Dataset", dataset_row)
         form.addRow("Dataset Card", self._dataset_meta_label)
 
@@ -282,7 +348,7 @@ class TrainTab(QWidget):
 
         group = QGroupBox("Dataset Inputs")
         layout = QVBoxLayout()
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
         self._train_drop_zone = FileDropZone("Train Images Folder", "Drop train folder (images+labels)", group)
         self._val_drop_zone = FileDropZone("Val Images Folder", "Drop val folder (images+labels)", group)
@@ -300,7 +366,7 @@ class TrainTab(QWidget):
         yaml_row = QWidget(group)
         yaml_row_layout = QHBoxLayout()
         yaml_row_layout.setContentsMargins(0, 0, 0, 0)
-        yaml_row_layout.setSpacing(8)
+        yaml_row_layout.setSpacing(6)
 
         browse_yaml_button = QPushButton("Use Existing data.yaml", yaml_row)
         browse_yaml_button.setProperty("secondary", True)
@@ -365,6 +431,9 @@ class TrainTab(QWidget):
         self._weight_decay_spin.setSingleStep(0.0001)
         self._weight_decay_spin.setValue(0.0005)
 
+        self._device_combo = QComboBox(group)
+        self._populate_device_combo(self._device_combo)
+
         grid.addWidget(QLabel("Epochs", group), 0, 0)
         grid.addWidget(self._epochs_spin, 0, 1)
         grid.addWidget(QLabel("Batch Size", group), 0, 2)
@@ -382,6 +451,8 @@ class TrainTab(QWidget):
 
         grid.addWidget(QLabel("Weight Decay", group), 3, 0)
         grid.addWidget(self._weight_decay_spin, 3, 1)
+        grid.addWidget(QLabel("Device", group), 3, 2)
+        grid.addWidget(self._device_combo, 3, 3)
 
         group.setLayout(grid)
         return group
@@ -391,7 +462,7 @@ class TrainTab(QWidget):
 
         group = QGroupBox("Augmentation")
         row = QHBoxLayout()
-        row.setSpacing(14)
+        row.setSpacing(6)
 
         self._mosaic_checkbox = QCheckBox("Mosaic", group)
         self._mosaic_checkbox.setChecked(True)
@@ -423,7 +494,7 @@ class TrainTab(QWidget):
 
         group = QGroupBox("Pretrained Weights")
         layout = QVBoxLayout()
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
         self._use_pretrained_checkbox = QCheckBox("Use pretrained initialization", group)
         self._use_pretrained_checkbox.setChecked(True)
@@ -436,7 +507,7 @@ class TrainTab(QWidget):
         custom_row = QWidget(group)
         custom_row_layout = QHBoxLayout()
         custom_row_layout.setContentsMargins(0, 0, 0, 0)
-        custom_row_layout.setSpacing(8)
+        custom_row_layout.setSpacing(6)
 
         self._custom_weights_input = QLineEdit(custom_row)
         self._custom_weights_input.setPlaceholderText("Path to custom pretrained weights")
@@ -483,7 +554,7 @@ class TrainTab(QWidget):
 
         group = QGroupBox("Controls")
         row = QHBoxLayout()
-        row.setSpacing(10)
+        row.setSpacing(6)
 
         self._start_button = QPushButton("Start Training", group)
         self._start_button.clicked.connect(self._start_training)
@@ -505,20 +576,26 @@ class TrainTab(QWidget):
 
         panel = QWidget(self)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         monitor_group = QGroupBox("Live Monitoring", panel)
         monitor_layout = QVBoxLayout()
-        monitor_layout.setSpacing(10)
+        monitor_layout.setSpacing(6)
 
-        self._metric_chart = MetricChart(monitor_group)
+        self._monitor_tabs = QTabWidget(monitor_group)
+        self._monitor_tabs.setDocumentMode(True)
+
+        self._metric_chart = MetricChart(self._monitor_tabs)
         self._metric_chart.setMinimumHeight(320)
+
+        self._system_metrics_chart = SystemMetricsChart(self._monitor_tabs)
+        self._system_metrics_chart.setMinimumHeight(220)
 
         progress_row = QWidget(monitor_group)
         progress_layout = QHBoxLayout()
         progress_layout.setContentsMargins(0, 0, 0, 0)
-        progress_layout.setSpacing(10)
+        progress_layout.setSpacing(6)
 
         self._epoch_progress_label = QLabel("Epoch: 0/0", progress_row)
         self._epoch_progress_label.setObjectName("metricValue")
@@ -543,7 +620,12 @@ class TrainTab(QWidget):
         self._save_run_button.setEnabled(False)
         self._save_run_button.clicked.connect(self._save_current_run)
 
-        monitor_layout.addWidget(self._metric_chart)
+        self._monitor_tabs.addTab(self._metric_chart, "Training Metrics")
+        self._monitor_tabs.addTab(self._system_metrics_chart, "System Metrics")
+        self._monitor_tabs.currentChanged.connect(self._save_monitor_tab_index)
+        self._restore_monitor_tab_index()
+
+        monitor_layout.addWidget(self._monitor_tabs)
         monitor_layout.addWidget(progress_row)
         monitor_layout.addWidget(self._epoch_progress_bar)
         monitor_layout.addWidget(self._log_panel, stretch=1)
@@ -554,6 +636,42 @@ class TrainTab(QWidget):
         layout.addWidget(monitor_group)
         panel.setLayout(layout)
         return panel
+
+    @staticmethod
+    def _populate_device_combo(combo: QComboBox) -> None:
+        combo.clear()
+        for label, value in list_compute_devices():
+            combo.addItem(label, value)
+
+    def _restore_monitor_tab_index(self) -> None:
+        session = get_session()
+        try:
+            record = session.query(AppSetting).filter(AppSetting.key == "train_monitor_tab").first()
+            if record is not None:
+                try:
+                    index = int(record.value)
+                except (TypeError, ValueError):
+                    return
+                if 0 <= index < self._monitor_tabs.count():
+                    self._monitor_tabs.setCurrentIndex(index)
+        finally:
+            session.close()
+
+    def _save_monitor_tab_index(self, index: int) -> None:
+        session = get_session()
+        try:
+            record = session.query(AppSetting).filter(AppSetting.key == "train_monitor_tab").first()
+            if record is None:
+                record = AppSetting(key="train_monitor_tab", value=index)
+                session.add(record)
+            else:
+                record.value = index
+            session.commit()
+        except Exception:
+            session.rollback()
+            LOGGER.exception("Failed to save monitor tab selection.")
+        finally:
+            session.close()
 
     def _on_dataset_changed(self, _index: int) -> None:
         """Update dataset card and inferred data.yaml path on dropdown change.
@@ -589,6 +707,29 @@ class TrainTab(QWidget):
         if candidate_yaml.exists() and not self._generated_data_yaml_path:
             self._set_data_yaml_path(str(candidate_yaml.resolve()))
 
+    def _on_task_changed(self, _index: int) -> None:
+        self._refresh_model_options()
+
+    def _refresh_model_options(self) -> None:
+        task = str(self._task_combo.currentData() or "detect")
+        current = self._model_combo.currentText().strip() if self._model_combo else ""
+        options = list(MODEL_CATALOG.get(task, ()))
+        self._model_combo.blockSignals(True)
+        self._model_combo.clear()
+        self._model_combo.addItems(options)
+        if current:
+            if current not in options:
+                self._model_combo.addItem(current)
+            self._model_combo.setCurrentText(current)
+        else:
+            self._model_combo.setCurrentIndex(0)
+        line_edit = self._model_combo.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText(
+                "e.g. yolov8n, yolov8n-seg, yolov8n-cls or path to .pt/.yaml"
+            )
+        self._model_combo.blockSignals(False)
+
     def _on_split_path_changed(self, split_name: str, path: str) -> None:
         """Record split-folder updates and regenerate data.yaml when possible.
 
@@ -602,6 +743,10 @@ class TrainTab(QWidget):
 
     def _try_generate_data_yaml(self) -> None:
         """Generate a temporary data.yaml when train/val folders are configured."""
+
+        task = str(self._task_combo.currentData() or "detect")
+        if task not in {"detect", "segment"}:
+            return
 
         train_path = self._split_paths.get("train")
         val_path = self._split_paths.get("val")
@@ -818,6 +963,18 @@ class TrainTab(QWidget):
         if selected:
             self._custom_weights_input.setText(str(Path(selected).resolve()))
 
+    def _select_model_source(self) -> None:
+        """Pick a model file (.pt/.yaml) and populate the model selector."""
+
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Model File",
+            str(self._project_root),
+            "Model Files (*.pt *.yaml *.yml)",
+        )
+        if selected:
+            self._model_combo.setCurrentText(str(Path(selected).resolve()))
+
     def _start_training(self) -> None:
         """Collect config and launch YOLO training in a worker thread."""
 
@@ -846,6 +1003,8 @@ class TrainTab(QWidget):
         self._epoch_progress_bar.setValue(0)
         self._epoch_progress_label.setText("Epoch: 0/0")
         self._best_map_label.setText("Best mAP50: - | mAP50-95: -")
+        self._system_metrics_chart.reset()
+        self._system_metrics_index = 0
 
         try:
             self._trainer = YOLOTrainer(config)
@@ -868,6 +1027,7 @@ class TrainTab(QWidget):
         self._stop_button.setEnabled(True)
 
         self._append_log("Starting training run...")
+        self._system_metrics_timer.start()
         self._trainer.start()
 
     def _stop_training(self) -> None:
@@ -902,27 +1062,34 @@ class TrainTab(QWidget):
             return None
 
         data_yaml_path = self._data_yaml_path_input.text().strip()
+        task = str(self._task_combo.currentData() or "detect")
         if not data_yaml_path:
             QMessageBox.warning(
                 self,
                 "Validation Error",
-                "Please select or generate a data.yaml file before starting training.",
+                "Please select a data.yaml or dataset path before starting training.",
             )
             return None
 
-        if not Path(data_yaml_path).exists():
-            QMessageBox.warning(self, "Validation Error", "Configured data.yaml path does not exist.")
+        data_path = Path(data_yaml_path)
+        if not data_path.exists():
+            QMessageBox.warning(self, "Validation Error", "Configured data path does not exist.")
             return None
 
-        class_count = self._read_class_count_from_data_yaml(Path(data_yaml_path))
-        if class_count <= 0:
-            QMessageBox.warning(
-                self,
-                "Validation Error",
-                "Configured data.yaml defines zero classes. "
-                "Regenerate data.yaml from split folders or choose a YAML with valid names/nc.",
-            )
-            return None
+        if task in {"detect", "segment"}:
+            if data_path.is_dir():
+                QMessageBox.warning(self, "Validation Error", "Detection/segmentation requires a data.yaml file.")
+                return None
+
+            class_count = self._read_class_count_from_data_yaml(data_path)
+            if class_count <= 0:
+                QMessageBox.warning(
+                    self,
+                    "Validation Error",
+                    "Configured data.yaml defines zero classes. "
+                    "Regenerate data.yaml from split folders or choose a YAML with valid names/nc.",
+                )
+                return None
 
         use_pretrained = self._use_pretrained_checkbox.isChecked()
         use_custom_weights = self._use_custom_weights_checkbox.isChecked() and use_pretrained
@@ -936,12 +1103,18 @@ class TrainTab(QWidget):
             QMessageBox.warning(self, "Validation Error", "Selected custom .pt file does not exist.")
             return None
 
+        model_arch = self._model_combo.currentText().strip()
+        if not model_arch:
+            QMessageBox.warning(self, "Validation Error", "Please select or enter a model.")
+            return None
+
         config: dict[str, Any] = {
             "run_name": run_name,
             "notes": self._notes_input.toPlainText().strip(),
             "project_id": self._active_project_id,
             "dataset_id": int(dataset_id),
-            "model_architecture": self._model_combo.currentText(),
+            "model_architecture": model_arch,
+            "task": task,
             "data_yaml_path": data_yaml_path,
             "epochs": int(self._epochs_spin.value()),
             "batch_size": int(self._batch_size_spin.value()),
@@ -960,9 +1133,15 @@ class TrainTab(QWidget):
             "use_pretrained": use_pretrained,
             "custom_weights_path": custom_weights_path if use_custom_weights else None,
             "output_root": str((self._project_root / "runs" / "train").resolve()),
+            "device": resolve_device_value(self._device_combo.currentData()),
         }
 
         return config
+
+    def _poll_system_metrics(self) -> None:
+        metrics = read_system_metrics()
+        self._system_metrics_index += 1
+        self._system_metrics_chart.append_sample(self._system_metrics_index, metrics)
 
     def _on_progress(self, progress: int) -> None:
         """Update training progress bar.
@@ -1022,6 +1201,7 @@ class TrainTab(QWidget):
 
         self._latest_training_result = result
 
+        self._system_metrics_timer.stop()
         self._start_button.setEnabled(True)
         self._stop_button.setEnabled(False)
         self._epoch_progress_bar.setValue(100)
@@ -1047,6 +1227,7 @@ class TrainTab(QWidget):
 
         self._start_button.setEnabled(True)
         self._stop_button.setEnabled(False)
+        self._system_metrics_timer.stop()
         self._append_log(f"[ERROR] {message}")
         QMessageBox.critical(self, "Training Error", message)
         self._trainer = None

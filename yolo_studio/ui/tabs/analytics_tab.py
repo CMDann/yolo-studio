@@ -117,13 +117,13 @@ class AnalyticsTab(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         filter_group = QGroupBox("Filters")
         filter_layout = QHBoxLayout()
-        filter_layout.setContentsMargins(8, 8, 8, 8)
-        filter_layout.setSpacing(8)
+        filter_layout.setContentsMargins(6, 6, 6, 6)
+        filter_layout.setSpacing(6)
 
         self._search_input = QLineEdit(filter_group)
         self._search_input.setPlaceholderText("Search by run name or notes")
@@ -158,7 +158,7 @@ class AnalyticsTab(QWidget):
         content = QWidget(self)
         content_layout = QVBoxLayout()
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(12)
+        content_layout.setSpacing(6)
 
         history_group = self._build_history_group(content)
         compare_group = self._build_comparison_group(content)
@@ -179,7 +179,7 @@ class AnalyticsTab(QWidget):
         export_row = QWidget(self)
         export_layout = QHBoxLayout()
         export_layout.setContentsMargins(0, 0, 0, 0)
-        export_layout.setSpacing(8)
+        export_layout.setSpacing(6)
 
         self._export_dashboard_button = QPushButton("Export Dashboard", export_row)
         self._export_dashboard_button.clicked.connect(self._export_dashboard)
@@ -196,8 +196,8 @@ class AnalyticsTab(QWidget):
     def _build_history_group(self, parent: QWidget) -> QGroupBox:
         group = QGroupBox("Training History", parent)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         self._history_plot = pg.PlotWidget(group)
         self._history_plot.setBackground("w")
@@ -220,8 +220,8 @@ class AnalyticsTab(QWidget):
     def _build_comparison_group(self, parent: QWidget) -> QGroupBox:
         group = QGroupBox("Run Comparison", parent)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         self._comparison_list = QListWidget(group)
         self._comparison_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -247,8 +247,8 @@ class AnalyticsTab(QWidget):
     def _build_loss_group(self, parent: QWidget) -> QGroupBox:
         group = QGroupBox("Loss Curves Overlay", parent)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         self._loss_list = QListWidget(group)
         self._loss_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -270,8 +270,8 @@ class AnalyticsTab(QWidget):
     def _build_heatmap_group(self, parent: QWidget) -> QGroupBox:
         group = QGroupBox("Class Performance Heatmap", parent)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         self._heatmap_plot = pg.PlotWidget(group)
         self._heatmap_plot.setBackground("w")
@@ -285,8 +285,8 @@ class AnalyticsTab(QWidget):
     def _build_dataset_group(self, parent: QWidget) -> QGroupBox:
         group = QGroupBox("Dataset Statistics", parent)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         self._dataset_stats_combo = QComboBox(group)
         self._dataset_stats_combo.currentIndexChanged.connect(self._render_dataset_stats)
@@ -316,8 +316,8 @@ class AnalyticsTab(QWidget):
     def _build_leaderboard_group(self, parent: QWidget) -> QGroupBox:
         group = QGroupBox("Model Leaderboard", parent)
         layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         self._leaderboard_table = QTableWidget(group)
         self._leaderboard_table.setSortingEnabled(True)

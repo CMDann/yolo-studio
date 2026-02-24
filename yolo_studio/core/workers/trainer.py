@@ -34,6 +34,7 @@ class TrainingConfig:
     project_id: int | None
     dataset_id: int
     model_architecture: str
+    task: str
     data_yaml_path: str
     epochs: int
     batch_size: int
@@ -46,6 +47,7 @@ class TrainingConfig:
     use_pretrained: bool
     custom_weights_path: str | None
     output_root: str
+    device: str | None
 
     @classmethod
     def from_mapping(cls, mapping: dict[str, Any]) -> "TrainingConfig":
@@ -65,6 +67,7 @@ class TrainingConfig:
             "run_name",
             "dataset_id",
             "model_architecture",
+            "task",
             "data_yaml_path",
             "epochs",
             "batch_size",
@@ -109,6 +112,7 @@ class TrainingConfig:
             project_id=int(mapping["project_id"]) if mapping.get("project_id") is not None else None,
             dataset_id=int(mapping["dataset_id"]),
             model_architecture=str(mapping["model_architecture"]),
+            task=str(mapping["task"]),
             data_yaml_path=data_yaml_path,
             epochs=int(mapping["epochs"]),
             batch_size=int(mapping["batch_size"]),
@@ -121,6 +125,7 @@ class TrainingConfig:
             use_pretrained=bool(mapping["use_pretrained"]),
             custom_weights_path=custom_weights,
             output_root=str(mapping["output_root"]),
+            device=str(mapping["device"]).strip() if mapping.get("device") else None,
         )
 
 
@@ -260,6 +265,7 @@ class YOLOTrainer(QThread):
             "epochs": self._config.epochs,
             "imgsz": self._config.image_size,
             "batch": self._config.batch_size,
+            "task": self._config.task,
             "lr0": self._config.learning_rate,
             "optimizer": self._config.optimizer,
             "warmup_epochs": self._config.warmup_epochs,
@@ -276,6 +282,9 @@ class YOLOTrainer(QThread):
             "hsv_v": 0.4 if self._config.augmentation["hsv"] else 0.0,
             "fliplr": 0.5 if self._config.augmentation["flip"] else 0.0,
         }
+
+        if self._config.device:
+            train_kwargs["device"] = self._config.device
 
         self.log.emit(f"Training args: {json.dumps(train_kwargs, default=str)}")
 
@@ -696,6 +705,14 @@ class YOLOTrainer(QThread):
 
         if self._config.custom_weights_path:
             return str(Path(self._config.custom_weights_path).resolve())
+
+        architecture = str(self._config.model_architecture).strip()
+        if architecture:
+            candidate = Path(architecture)
+            if candidate.exists():
+                return str(candidate.resolve())
+            if architecture.endswith((".pt", ".yaml", ".yml")):
+                return architecture
 
         if self._config.use_pretrained:
             return f"{self._config.model_architecture}.pt"
