@@ -1,3 +1,6 @@
+![gif](./ref/screen.gif)
+
+
 # YOLO Studio
 
 YOLO Studio is a desktop developer tool for training, organizing, and remotely deploying YOLO computer vision models.
