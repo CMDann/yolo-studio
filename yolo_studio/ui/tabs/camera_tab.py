@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -34,6 +35,21 @@ from sqlalchemy.orm import joinedload
 
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _preferred_camera_backend() -> int:
+    """Return the preferred OpenCV camera backend for the current platform.
+
+    macOS  -> CAP_AVFOUNDATION (native AVFoundation framework)
+    Linux  -> CAP_V4L2         (Video4Linux2)
+    Other  -> CAP_ANY          (let OpenCV auto-detect)
+    """
+
+    if sys.platform == "darwin":
+        return cv2.CAP_AVFOUNDATION
+    if sys.platform.startswith("linux"):
+        return cv2.CAP_V4L2
+    return cv2.CAP_ANY
 
 
 @dataclass(slots=True)
@@ -123,7 +139,7 @@ class CameraStreamWorker(QThread):
             self.error.emit(f"Ultralytics is unavailable: {exc}")
             return
 
-        capture = cv2.VideoCapture(self._device_index)
+        capture = cv2.VideoCapture(self._device_index, _preferred_camera_backend())
         if not capture.isOpened():
             self.error.emit(f"Unable to open camera device {self._device_index}.")
             return
@@ -550,7 +566,7 @@ class CameraTab(QWidget):
         indices = []
         consecutive_misses = 0
         max_probes = 12
-        backend = cv2.CAP_V4L2 if hasattr(cv2, "CAP_V4L2") else cv2.CAP_ANY
+        backend = _preferred_camera_backend()
 
         for idx in range(max_probes):
             cap = cv2.VideoCapture(idx, backend)
