@@ -7,6 +7,7 @@ Ultralytics training without blocking the main Qt event loop.
 from __future__ import annotations
 
 import csv
+import io
 import json
 import logging
 import re
@@ -539,11 +540,7 @@ class YOLOTrainer(QThread):
             return {}
 
         try:
-            with csv_path.open("r", encoding="utf-8", newline="") as handle:
-                reader = csv.DictReader(handle)
-                last_row: dict[str, str] | None = None
-                for row in reader:
-                    last_row = row
+            last_row = self._read_last_results_csv_row(csv_path)
         except Exception:
             LOGGER.debug("Unable to parse Ultralytics results CSV: %s", csv_path, exc_info=True)
             return {}
@@ -573,6 +570,44 @@ class YOLOTrainer(QThread):
                 payload[key] = numeric
 
         return payload
+
+    def _read_last_results_csv_row(self, csv_path: Path) -> dict[str, str] | None:
+        """Read the last row from Ultralytics results.csv efficiently.
+
+        Ultralytics appends one line per epoch. Reading the entire CSV each epoch
+        turns into O(n^2) work over long runs; this method reads the header and
+        tail line only.
+        """
+
+        header = ""
+        last_line = ""
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            header = handle.readline()
+            if not header:
+                return None
+
+            # Seek from end to find the last non-empty line.
+            handle.seek(0, 2)
+            end_pos = handle.tell()
+            if end_pos <= len(header):
+                return None
+
+            # Read at most the last 64KB to find the final newline.
+            read_size = min(65536, end_pos)
+            handle.seek(end_pos - read_size)
+            tail = handle.read(read_size)
+
+        lines = [line for line in tail.splitlines() if line.strip()]
+        if not lines:
+            return None
+
+        last_line = lines[-1]
+        # Build a tiny two-line CSV to let csv.DictReader handle quoting.
+        mini_csv = header.rstrip("\n") + "\n" + last_line + "\n"
+        reader = csv.DictReader(io.StringIO(mini_csv))
+        for row in reader:
+            return row
+        return None
 
     def _create_training_run_record(self) -> int:
         """Insert the initial TrainingRun row and return its primary key.
