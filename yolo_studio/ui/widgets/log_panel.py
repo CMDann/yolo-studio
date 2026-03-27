@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtWidgets import QTextEdit, QVBoxLayout, QWidget
+from collections import deque
+
+from PyQt6.QtCore import QTimer, QObject, pyqtSignal
+from PyQt6.QtWidgets import QPlainTextEdit, QVBoxLayout, QWidget
 
 
 class _LogEmitter(QObject):
@@ -56,10 +58,17 @@ class LogPanel(QWidget):
         self._emitter = _LogEmitter()
         self._emitter.message_emitted.connect(self.append_message)
 
-        self._log_view = QTextEdit(self)
+        self._buffer: deque[str] = deque()
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(100)
+        self._flush_timer.timeout.connect(self._flush_buffer)
+
+        self._log_view = QPlainTextEdit(self)
         self._log_view.setObjectName("logPanel")
         self._log_view.setReadOnly(True)
         self._log_view.setPlaceholderText("Runtime logs will appear here...")
+        # Keep the log bounded to avoid unbounded memory growth.
+        self._log_view.setMaximumBlockCount(10_000)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(8, 8, 8, 8)
@@ -70,15 +79,39 @@ class LogPanel(QWidget):
     def append_message(self, message: str) -> None:
         """Append a log line to the panel.
 
+        This method is safe to call at high frequency; it buffers messages and
+        flushes them in batches to avoid UI freezes.
+
         Args:
             message: Formatted log message to append.
         """
 
-        self._log_view.append(message)
+        if not message:
+            return
+
+        self._buffer.append(str(message))
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
+
+    def _flush_buffer(self) -> None:
+        if not self._buffer:
+            self._flush_timer.stop()
+            return
+
+        chunk: list[str] = []
+        # Cap work per tick to keep the UI responsive.
+        while self._buffer and len(chunk) < 500:
+            chunk.append(self._buffer.popleft())
+
+        self._log_view.appendPlainText("\n".join(chunk))
+        if not self._buffer:
+            self._flush_timer.stop()
 
     def clear(self) -> None:
         """Clear all log output from the panel."""
 
+        self._buffer.clear()
+        self._flush_timer.stop()
         self._log_view.clear()
 
     def attach_logger(self, logger: logging.Logger, level: int = logging.INFO) -> QtLogHandler:
