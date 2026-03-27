@@ -126,7 +126,7 @@ class TrainTab(QWidget):
         super().__init__(parent)
 
         self._active_project_id: int | None = None
-        self._project_root = Path(__file__).resolve().parents[2]
+        self._project_root: Path | None = None
         self._datasets: dict[int, DatasetSummary] = {}
         self._trainer: Any = None
         self._split_paths: dict[str, str] = {}
@@ -192,8 +192,26 @@ class TrainTab(QWidget):
 
     def set_project_context(self, project_id: int | None, project_root: str | None = None) -> None:
         self._active_project_id = project_id
-        self._project_root = Path(project_root) if project_root else Path(__file__).resolve().parents[2]
+        self._project_root = Path(project_root).resolve() if project_root else None
         self.refresh_datasets()
+
+    def _require_project_root(self, action: str) -> Path | None:
+        """Return project root if set; otherwise show a user-facing warning.
+
+        Args:
+            action: Short description of the attempted action (for messaging).
+        """
+
+        if self._project_root is not None:
+            return self._project_root
+
+        QMessageBox.warning(
+            self,
+            "Project Required",
+            f"Please open or create a project before {action}.\n\n"
+            "YOLO Studio needs a project workspace to store generated data, runs, and models.",
+        )
+        return None
 
     def refresh_datasets(self) -> None:
         """Reload dataset options from SQLite and refresh the metadata card."""
@@ -753,10 +771,14 @@ class TrainTab(QWidget):
         if not train_path or not val_path:
             return
 
+        root = self._require_project_root("generating training data.yaml")
+        if root is None:
+            return
+
         run_slug = self._slugify(self._run_name_input.text().strip() or "run")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        generated_dir = self._project_root / "datasets" / "generated"
+        generated_dir = root / "datasets" / "generated"
         generated_dir.mkdir(parents=True, exist_ok=True)
 
         yaml_path = generated_dir / f"{run_slug}_{timestamp}_data.yaml"
@@ -920,7 +942,7 @@ class TrainTab(QWidget):
         selected, _ = QFileDialog.getOpenFileName(
             self,
             "Select data.yaml",
-            str(self._project_root),
+            str(self._project_root or Path.home()),
             "YAML Files (*.yaml *.yml)",
         )
         if not selected:
@@ -957,7 +979,7 @@ class TrainTab(QWidget):
         selected, _ = QFileDialog.getOpenFileName(
             self,
             "Select Pretrained Weights",
-            str(self._project_root),
+            str(self._project_root or Path.home()),
             "PyTorch Weights (*.pt)",
         )
         if selected:
@@ -969,7 +991,7 @@ class TrainTab(QWidget):
         selected, _ = QFileDialog.getOpenFileName(
             self,
             "Select Model File",
-            str(self._project_root),
+            str(self._project_root or Path.home()),
             "Model Files (*.pt *.yaml *.yml)",
         )
         if selected:
@@ -1050,6 +1072,10 @@ class TrainTab(QWidget):
         Returns:
             dict[str, Any] | None: Valid training config, or None if validation fails.
         """
+
+        root = self._require_project_root("starting training")
+        if root is None:
+            return None
 
         run_name = self._run_name_input.text().strip()
         if not run_name:
@@ -1132,7 +1158,7 @@ class TrainTab(QWidget):
             },
             "use_pretrained": use_pretrained,
             "custom_weights_path": custom_weights_path if use_custom_weights else None,
-            "output_root": str((self._project_root / "runs" / "train").resolve()),
+            "output_root": str((root / "runs" / "train").resolve()),
             "device": resolve_device_value(self._device_combo.currentData()),
         }
 
@@ -1251,7 +1277,11 @@ class TrainTab(QWidget):
             QMessageBox.warning(self, "Missing Weights", "Trained weights file no longer exists.")
             return
 
-        saved_models_dir = self._project_root / "saved_models"
+        root = self._require_project_root("saving trained models")
+        if root is None:
+            return
+
+        saved_models_dir = root / "saved_models"
         saved_models_dir.mkdir(parents=True, exist_ok=True)
 
         safe_run_name = self._slugify(self._run_name_input.text().strip() or "saved_model")
