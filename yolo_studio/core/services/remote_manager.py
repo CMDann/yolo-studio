@@ -22,6 +22,8 @@ from typing import Any, Callable
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "runs" / "remote_results"
+# Keep bounded to avoid memory DoS on clients.
+MAX_WS_MESSAGE_SIZE = 100 * 1024 * 1024  # 100 MiB
 
 
 class RemoteManagerError(RuntimeError):
@@ -623,7 +625,7 @@ class RemoteManager:
                 close_timeout=resolved_timeout,
                 ping_interval=20,
                 ping_timeout=20,
-                max_size=None,
+                max_size=MAX_WS_MESSAGE_SIZE,
             ) as ws:
                 await ws.send(json.dumps(message))
                 raw = await asyncio.wait_for(ws.recv(), timeout=resolved_timeout)
@@ -670,7 +672,7 @@ class RemoteManager:
                 close_timeout=resolved_timeout,
                 ping_interval=20,
                 ping_timeout=20,
-                max_size=None,
+                max_size=MAX_WS_MESSAGE_SIZE,
             ) as ws:
                 await ws.send(json.dumps(message))
 
@@ -756,7 +758,7 @@ class RemoteManager:
                 close_timeout=resolved_timeout,
                 ping_interval=20,
                 ping_timeout=20,
-                max_size=None,
+                max_size=MAX_WS_MESSAGE_SIZE,
             ) as ws:
                 await ws.send(json.dumps(message))
 
