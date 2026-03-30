@@ -1,9 +1,19 @@
 # YOLO Studio edge agent configuration
 # Update auth_token before deploying this on a real network.
 
-host: "0.0.0.0"
+# Security: bind to loopback by default. Set to 0.0.0.0 only if you understand the risks.
+host: "127.0.0.1"
 port: 8765
+# Security: you MUST change this before exposing the agent to other machines.
 auth_token: "change-me-before-production"
+
+# Maximum accepted websocket message size (bytes). Keep this bounded to avoid DoS.
+max_message_size: 104857600  # 100 MiB
+# Maximum allowed model upload size (bytes, decoded). Prevents disk fill.
+max_model_bytes: 52428800    # 50 MiB
+
+# Allow loading pickle-backed PyTorch .pt models (RCE risk). Prefer ONNX.
+allow_unsafe_pytorch_pt: false
 
 # Relative paths are resolved from this file's directory.
 model_cache_dir: "./model_cache"

@@ -52,6 +52,7 @@ except Exception as exc:  # pragma: no cover - dependency import guard
 
 LOGGER = logging.getLogger("yolo_studio.edge.agent")
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("agent_config.yaml")
+DEFAULT_AUTH_TOKEN = "change-me-before-production"
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
 
@@ -66,6 +67,9 @@ class AgentConfig:
     output_dir: Path
     chunk_size: int
     log_file: Path
+    max_message_size: int
+    max_model_bytes: int
+    allow_unsafe_pytorch_pt: bool
 
     @classmethod
     def from_yaml(cls, config_path: Path) -> "AgentConfig":
@@ -91,7 +95,7 @@ class AgentConfig:
 
         base_dir = config_path.resolve().parent
 
-        host = str(raw.get("host") or "0.0.0.0").strip()
+        host = str(raw.get("host") or "127.0.0.1").strip()
         port = int(raw.get("port") or 8765)
         auth_token = str(raw.get("auth_token") or "").strip()
 
@@ -100,14 +104,27 @@ class AgentConfig:
         log_file = _resolve_path(base_dir, raw.get("log_file") or "./agent.log")
         chunk_size = int(raw.get("chunk_size") or 200_000)
 
+        max_message_size = int(raw.get("max_message_size") or 100 * 1024 * 1024)
+        max_model_bytes = int(raw.get("max_model_bytes") or 50 * 1024 * 1024)
+        allow_unsafe_pytorch_pt = bool(raw.get("allow_unsafe_pytorch_pt") or False)
+
         if not host:
             raise ValueError("Config 'host' must be set.")
         if port <= 0 or port > 65535:
             raise ValueError("Config 'port' must be between 1 and 65535.")
         if not auth_token:
             raise ValueError("Config 'auth_token' must be set.")
+        if auth_token == DEFAULT_AUTH_TOKEN:
+            raise ValueError(
+                "Config 'auth_token' is still set to the insecure default. "
+                "Generate a strong token before starting the agent."
+            )
         if chunk_size < 1_024:
             raise ValueError("Config 'chunk_size' must be at least 1024 bytes.")
+        if max_message_size < 1_024 * 1024:
+            raise ValueError("Config 'max_message_size' must be at least 1MiB.")
+        if max_model_bytes < 1_024 * 1024:
+            raise ValueError("Config 'max_model_bytes' must be at least 1MiB.")
 
         model_cache_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +138,9 @@ class AgentConfig:
             output_dir=output_dir,
             chunk_size=chunk_size,
             log_file=log_file,
+            max_message_size=max_message_size,
+            max_model_bytes=max_model_bytes,
+            allow_unsafe_pytorch_pt=allow_unsafe_pytorch_pt,
         )
 
 
@@ -161,7 +181,7 @@ class EdgeAgent:
             self._handle_connection,
             self._config.host,
             self._config.port,
-            max_size=None,
+            max_size=self._config.max_message_size,
             ping_interval=20,
             ping_timeout=20,
         ):
@@ -294,6 +314,19 @@ class EdgeAgent:
 
         if not model_bytes:
             raise ValueError("Decoded model payload is empty.")
+
+        if len(model_bytes) > self._config.max_model_bytes:
+            raise ValueError(
+                f"Model payload too large ({len(model_bytes)} bytes). "
+                f"Max allowed is {self._config.max_model_bytes} bytes."
+            )
+
+        suffix = Path(model_name).suffix.lower()
+        if suffix == ".pt" and not self._config.allow_unsafe_pytorch_pt:
+            raise ValueError(
+                "Refusing to deploy PyTorch .pt weights because they can be pickle-backed and unsafe. "
+                "Convert to ONNX or set allow_unsafe_pytorch_pt: true in agent_config.yaml (at your own risk)."
+            )
 
         # Model names are sanitized to avoid path traversal in cache output.
         destination = self._config.model_cache_dir / Path(model_name).name
